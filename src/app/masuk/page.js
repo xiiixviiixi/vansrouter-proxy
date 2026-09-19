@@ -5,7 +5,7 @@ import { getDashboardAuthSession } from "@/lib/auth/dashboardSession";
 import MasukClient from "./MasukClient";
 
 export default async function MasukPage() {
-  let initialAuth = { hasPassword: true, authMode: "password", oidcConfigured: false, oidcLoginLabel: "Masuk dengan OIDC", requireLogin: true };
+  let initialAuth = { hasPassword: true, authMode: "password", oidcConfigured: false, oidcLoginLabel: "Sign in with OIDC", requireLogin: true };
   try {
     const settings = await getSettings();
     const cookieStore = await cookies();

@@ -25,7 +25,7 @@ export default function MasukClient({ initialAuth }) {
   const hasPassword = initialAuth?.hasPassword ?? null;
   const authMode = initialAuth?.authMode || "password";
   const oidcConfigured = initialAuth?.oidcConfigured || false;
-  const oidcLoginLabel = initialAuth?.oidcLoginLabel || "Masuk dengan OIDC";
+  const oidcLoginLabel = initialAuth?.oidcLoginLabel || "Sign in with OIDC";
   const router = useRouter();
 
   useEffect(() => {
@@ -55,10 +55,10 @@ export default function MasukClient({ initialAuth }) {
         router.refresh();
       } else {
         const data = await res.json();
-        dispatch({ type: "ERROR", error: data.error || "Password salah", resetHint: data.resetHint, retryAfter: data.retryAfter ? Number(data.retryAfter) : 0 });
+        dispatch({ type: "ERROR", error: data.error || "Invalid password", resetHint: data.resetHint, retryAfter: data.retryAfter ? Number(data.retryAfter) : 0 });
       }
     } catch (err) {
-      dispatch({ type: "ERROR", error: "Terjadi kesalahan. Silakan coba lagi." });
+      dispatch({ type: "ERROR", error: "Something went wrong. Please try again." });
     }
   };
 
@@ -92,8 +92,8 @@ export default function MasukClient({ initialAuth }) {
           <h1 className="text-3xl font-bold text-primary mb-2">VansAI</h1>
           <p className="text-text-muted text-sm">
             {authMode === "oidc" && oidcConfigured
-              ? "Masuk dengan OIDC provider untuk mengakses dashboard"
-              : "Masukkan password untuk mengakses dashboard"}
+              ? "Sign in with your OIDC provider to access the dashboard"
+              : "Enter your password to access the dashboard"}
           </p>
         </div>
 
@@ -111,13 +111,13 @@ export default function MasukClient({ initialAuth }) {
               <form onSubmit={handleLogin} className="flex flex-col gap-4">
                 {((authMode === "oidc" && !oidcConfigured) || (authMode === "both" && !oidcConfigured)) && (
                   <p className="text-xs text-amber-600 dark:text-amber-400 text-center">
-                    OIDC login aktif, tapi issuer/client belum dikonfigurasi. Password login masih tersedia.
+                    OIDC login is enabled, but the issuer/client is not configured yet. Password login is still available.
                   </p>
                 )}
 
                 {authMode === "both" && oidcConfigured && (
                   <p className="text-xs text-text-muted text-center">
-                    Password dan OIDC login keduanya aktif.
+                    Both password and OIDC login are enabled.
                   </p>
                 )}
 
@@ -126,7 +126,7 @@ export default function MasukClient({ initialAuth }) {
                   <Input
                     id="masuk-password"
                     type="password"
-                    placeholder="Masukkan password"
+                    placeholder="Enter password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
@@ -135,12 +135,12 @@ export default function MasukClient({ initialAuth }) {
                   {error && <p className="text-xs text-red-500">{error}</p>}
                   {retryAfter > 0 && (
                     <p className="text-xs text-amber-600 dark:text-amber-400">
-                      Terkunci. Coba lagi dalam <span className="font-mono">{retryAfter}s</span>.
+                      Locked. Try again in <span className="font-mono">{retryAfter}s</span>.
                     </p>
                   )}
                   {resetHint && (
                     <p className="text-xs text-text-muted">
-                      Lupa password? Buka <code className="bg-sidebar px-1 rounded">vansrouter</code> CLI di host → <b>Settings</b> → <b>Reset Password to Default</b>.
+                      Forgot password? Open the <code className="bg-sidebar px-1 rounded">vansrouter</code> CLI on the host → <b>Settings</b> → <b>Reset Password to Default</b>.
                     </p>
                   )}
                 </div>
@@ -152,15 +152,15 @@ export default function MasukClient({ initialAuth }) {
                   loading={loading}
                   disabled={retryAfter > 0}
                 >
-                  {retryAfter > 0 ? `Tunggu ${retryAfter}s` : "Masuk"}
+                  {retryAfter > 0 ? `Wait ${retryAfter}s` : "Sign In"}
                 </Button>
 
                 <p className="text-xs text-center text-text-muted mt-2">
-                  Password default adalah <code className="bg-sidebar px-1 rounded">123456</code>
+                  Default password is <code className="bg-sidebar px-1 rounded">123456</code>
                 </p>
                 {hasPassword === false && (
                   <p className="text-xs text-center text-text-muted">
-                    Custom password belum diset. Password default di atas akan berfungsi sampai diganti.
+                    No custom password set. The default password above will work until changed.
                   </p>
                 )}
               </form>

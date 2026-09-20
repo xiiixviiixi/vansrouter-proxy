@@ -63,6 +63,11 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/custom-server.js ./custom-server.js
+# Boot-time provider seed (scripts/seed-providers.mjs, wired in custom-server.js).
+# Needs src/lib (DB driver + migrations, ~500KB, relative imports only).
+COPY --from=builder /app/scripts/seed-providers.mjs ./scripts/seed-providers.mjs
+COPY --from=builder /app/src/lib ./src/lib
+COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/open-sse ./open-sse
 # Next file tracing can omit sibling files; MITM runs server.js as a separate process.
 COPY --from=builder /app/src/mitm ./src/mitm

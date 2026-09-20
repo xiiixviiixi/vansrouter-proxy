@@ -34,4 +34,13 @@ http.createServer = (...args) => {
   return origCreate(...rest, wrapped);
 };
 
-require("./server.js");
+// Seed provider keys from a Render secret file (fail-open) before boot.
+(async () => {
+  try {
+    const { seedFromSecretFile } = await import("./scripts/seed-providers.mjs");
+    await seedFromSecretFile();
+  } catch (error) {
+    console.warn(`[seed] skipped: ${error?.message || error}`);
+  }
+  require("./server.js");
+})();

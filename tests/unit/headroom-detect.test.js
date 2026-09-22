@@ -15,20 +15,25 @@ vi.mock("child_process", () => ({
   execFileSync: mocks.execFileSync,
 }));
 
-import { findPython310, getHeadroomStatus, getInstalledHeadroomExtras, isLoopbackHeadroomUrl } from "../../src/lib/headroom/detect.js";
+import { findPython310, getHeadroomStatus, getInstalledHeadroomExtras, isLoopbackHeadroomUrl, clearHeadroomDetectCache } from "../../src/lib/headroom/detect.js";
 
 afterEach(() => {
   vi.clearAllMocks();
+  clearHeadroomDetectCache();
 });
 
 describe("headroom detect", () => {
-  it("detects installed headroom version and extras from pip list", () => {
+  it("detects installed headroom version and extras from a single python probe", () => {
+    mocks.execFileSync.mockImplementation(() => Buffer.from(JSON.stringify({
+      version: "0.26.0",
+      found: ["tree-sitter"],
+    })));
     const result = getInstalledHeadroomExtras("python3");
 
     expect(mocks.execFileSync).toHaveBeenCalledWith(
       "python3",
-      ["-m", "pip", "list", "--format=json", "--disable-pip-version-check"],
-      expect.objectContaining({ windowsHide: true, timeout: 8000 }),
+      ["-c", expect.any(String)],
+      expect.objectContaining({ windowsHide: true, timeout: 15000 }),
     );
     expect(result).toEqual({
       installed: true,
@@ -67,10 +72,10 @@ describe("headroom detect", () => {
     mocks.execFileSync.mockImplementation((py, args) => {
       if (py === "python3" && args.join(" ") === "-m pip show headroom-ai") throw new Error("not installed in python3");
       if (py === "python" && args.join(" ") === "-m pip show headroom-ai") return Buffer.from("Name: headroom-ai\nVersion: 0.26.0\n");
-      if (py === "python" && args.join(" ").startsWith("-m pip list ")) return Buffer.from(JSON.stringify([
-        { name: "headroom-ai", version: "0.26.0" },
-        { name: "tree-sitter", version: "0.25.0" },
-      ]));
+      if (py === "python" && args[0] === "-c") return Buffer.from(JSON.stringify({
+        version: "0.26.0",
+        found: ["tree-sitter"],
+      }));
       throw new Error(`unexpected execFileSync: ${py} ${args.join(" ")}`);
     });
 

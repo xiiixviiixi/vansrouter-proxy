@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import { DATA_DIR } from "@/lib/dataDir.js";
-import { findHeadroomBinary, findPython310, HEADROOM_COMPRESSION_EXTRAS, EXTRA_MARKERS, getInstalledHeadroomExtras } from "./detect.js";
+import { findHeadroomBinary, findPython310, HEADROOM_COMPRESSION_EXTRAS, EXTRA_MARKERS, getInstalledHeadroomExtras, clearHeadroomDetectCache } from "./detect.js";
 
 const HEADROOM_DIR = path.join(DATA_DIR, "headroom");
 const PID_FILE = path.join(HEADROOM_DIR, "proxy.pid");
@@ -299,6 +299,7 @@ export async function installHeadroomExtras(extras = []) {
     child.once("exit", (code) => {
       fs.closeSync(outFd);
       if (code === 0) {
+        clearHeadroomDetectCache();
         const status = getInstalledHeadroomExtras(py);
         resolve({ success: true, code, spec, extras: requested, ...status });
       } else {
@@ -341,6 +342,7 @@ export async function uninstallHeadroomExtras(extras = []) {
     child.once("exit", (code) => {
       fs.closeSync(outFd);
       if (code === 0) {
+        clearHeadroomDetectCache();
         const status = getInstalledHeadroomExtras(py);
         resolve({ success: true, code, removed: pkgs, extras: requested, ...status });
       } else {

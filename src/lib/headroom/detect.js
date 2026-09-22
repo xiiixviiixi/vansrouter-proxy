@@ -15,6 +15,7 @@ export const EXTRA_MARKERS = {
 };
 
 const HEADROOM_PIP_TIMEOUT_MS = 8000;
+const HEADROOM_PROBE_TIMEOUT_MS = 15000;
 
 const IS_WIN = process.platform === "win32";
 const WHICH_CMD = IS_WIN ? "where" : "which";
@@ -143,12 +144,13 @@ export function isLoopbackHeadroomUrl(url) {
 
 // Aggregate status for the dashboard: installed, running, python interpreter.
 export async function getHeadroomStatus(url) {
-  const path = findHeadroomBinary();
-  const python = findPython310();
-  const installed = Boolean(path);
+  const { binary: path, python, extras: cached } = getCachedDetection();
+  const installed = Boolean(path) && cached.installed;
   const running = await probeProxyRunning(url);
   const localUrl = isLoopbackHeadroomUrl(url);
-  const extrasStatus = installed ? getInstalledHeadroomExtras(python) : { installed: false, version: null, extras: { code: false, ml: false } };
+  const extrasStatus = installed
+    ? { installed: true, version: cached.version, extras: cached.extras }
+    : { installed: false, version: null, extras: { code: false, ml: false } };
   return {
     installed,
     path,
@@ -161,32 +163,72 @@ export async function getHeadroomStatus(url) {
   };
 }
 
+// Detection-result cache: binary/python/extras probing shells out to several
+// processes (and `pip list` is very slow on small instances), so reuse results
+// briefly. Reachability is still probed live on every status call.
+const DETECT_TTL_MS = 60_000;
+let _detectCache = { ts: 0, binary: undefined, python: undefined, extras: undefined };
+
+export function clearHeadroomDetectCache() {
+  _detectCache = { ts: 0, binary: undefined, python: undefined, extras: undefined };
+}
+
 // Parse installed headroom-ai version + which compression extras are
-// actually installed (detected via marker package presence). One `pip list`
-// call is enough to answer both questions.
+// actually installed. Uses a single `python -c` probe with importlib metadata
+// lookups (no package imports, no slow `pip list` resolution).
 //
 // Returns: { installed: bool, version: string|null, extras: { code, ml } }
 export function getInstalledHeadroomExtras(python) {
   const py = python || findPython310();
   if (!py) return { installed: false, version: null, extras: { code: false, ml: false } };
+  const markers = {};
+  for (const extra of HEADROOM_COMPRESSION_EXTRAS) {
+    for (const marker of EXTRA_MARKERS[extra] || []) markers[marker] = extra;
+  }
+  const probe = `
+import importlib.metadata as metadata
+import importlib.util as util
+import json
+names = ${JSON.stringify(Object.keys(markers))}
+try:
+    version = metadata.version("headroom-ai")
+except Exception:
+    version = None
+print(json.dumps({
+    "version": version,
+    "found": [name for name in names if util.find_spec(name.replace("-", "_")) is not None],
+}))
+`.trim();
   try {
-    const out = execFileSync(py, ["-m", "pip", "list", "--format=json", "--disable-pip-version-check"], {
+    const out = execFileSync(py, ["-c", probe], {
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true,
-      timeout: HEADROOM_PIP_TIMEOUT_MS,
+      timeout: HEADROOM_PROBE_TIMEOUT_MS,
       env: { ...process.env, PATH: EXTENDED_PATH },
     }).toString();
-    const packages = JSON.parse(out);
-    const names = new Set(packages.map((p) => String(p.name || "").toLowerCase()));
-    const installed = names.has("headroom-ai");
-    if (!installed) return { installed: false, version: null, extras: { code: false, ml: false } };
-    const version = packages.find((p) => p.name?.toLowerCase() === "headroom-ai")?.version || null;
+    const parsed = JSON.parse(out.slice(out.indexOf("{")));
+    if (!parsed?.version) return { installed: false, version: null, extras: { code: false, ml: false } };
+    const found = new Set((parsed.found || []).map((name) => String(name).toLowerCase()));
     const extras = {};
     for (const extra of HEADROOM_COMPRESSION_EXTRAS) {
-      extras[extra] = EXTRA_MARKERS[extra].some((m) => names.has(m));
+      extras[extra] = (EXTRA_MARKERS[extra] || []).some((m) => found.has(m.toLowerCase()));
     }
-    return { installed: true, version, extras };
+    return { installed: true, version: parsed.version, extras };
   } catch {
     return { installed: false, version: null, extras: { code: false, ml: false } };
   }
+}
+
+function getCachedDetection() {
+  const now = Date.now();
+  if (_detectCache.binary !== undefined && now - _detectCache.ts < DETECT_TTL_MS) {
+    return _detectCache;
+  }
+  const binary = findHeadroomBinary();
+  const python = findPython310();
+  const extras = binary
+    ? getInstalledHeadroomExtras(python)
+    : { installed: false, version: null, extras: { code: false, ml: false } };
+  _detectCache = { ts: now, binary, python, extras };
+  return _detectCache;
 }

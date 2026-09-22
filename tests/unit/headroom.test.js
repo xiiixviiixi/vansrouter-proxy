@@ -193,6 +193,30 @@ describe("compressWithHeadroom", () => {
     expect(body.messages[0].content).toBe("long");
   });
 
+  it("fails open on an aborted compression request without touching the body", async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException("The operation was aborted.", "AbortError"));
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    global.fetch = vi.fn(async (_url, init) => {
+      init.signal.throwIfAborted();
+      throw new Error("fetch should have aborted before sending");
+    });
+    const body = { messages: [{ role: "user", content: "long" }] };
+    const original = structuredClone(body);
+    const diagnostics = {};
+
+    const stats = await compressWithHeadroom(body, {
+      enabled: true,
+      url: "http://localhost:8787",
+      timeoutMs: 5000,
+      diagnostics,
+    });
+
+    expect(stats).toBeNull();
+    expect(body).toEqual(original);
+    expect(diagnostics.reason).toMatch(/request failed/);
+  });
+
   it("skips unknown shapes", async () => {
     global.fetch = vi.fn();
     const body = { contents: [{ parts: [{ text: "long" }] }] };
@@ -227,14 +251,14 @@ describe("compressWithHeadroom", () => {
       return calls;
     }
 
-    it("passes a valid positive timeout to AbortSignal.timeout", async () => {
+    it("caps configured timeouts at 2000 ms", async () => {
       makeSuccessfulFetch();
       const calls = captureTimeoutCalls();
       const body = { messages: [{ role: "user", content: "hello" }] };
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: 5000 });
 
-      expect(calls).toContain(5000);
+      expect(calls).toContain(2000);
     });
 
     it("falls back to the default timeout when timeoutMs is null", async () => {
@@ -244,7 +268,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: null });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(2000);
     });
 
     it("falls back to the default timeout when timeoutMs is 0", async () => {
@@ -254,7 +278,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: 0 });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(2000);
     });
 
     it("falls back to the default timeout when timeoutMs is negative", async () => {
@@ -264,7 +288,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: -100 });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(2000);
     });
 
     it("falls back to the default timeout when timeoutMs is NaN", async () => {
@@ -274,7 +298,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: NaN });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(2000);
     });
 
     it("falls back to the default timeout when timeoutMs is Infinity", async () => {
@@ -284,7 +308,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: Infinity });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(2000);
     });
 
     it("falls back to the default timeout when timeoutMs is a string", async () => {
@@ -294,7 +318,7 @@ describe("compressWithHeadroom", () => {
 
       await compressWithHeadroom(body, { enabled: true, url: "http://localhost:8787", timeoutMs: "5000" });
 
-      expect(calls).toContain(3000);
+      expect(calls).toContain(2000);
     });
   });
 });

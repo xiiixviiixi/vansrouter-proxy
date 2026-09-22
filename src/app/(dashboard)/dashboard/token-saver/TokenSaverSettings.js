@@ -42,6 +42,8 @@ export default function TokenSaverSettings({
   pxpipeEnabled,
   handlePxpipeEnabled,
 }) {
+  const availableExtras = Array.isArray(headroomExtras?.available) ? headroomExtras.available : [];
+  const proxyOnly = headroomExtras?.proxyOnly === true || availableExtras.length === 0;
   return (
     <Card id="rtk">
       <div className="flex items-center justify-between mb-2">
@@ -117,7 +119,12 @@ export default function TokenSaverSettings({
               Compression extras
               {headroomExtras.version ? ` · v${headroomExtras.version}` : ""}:
             </span>
-            {headroomExtras.available.map((extra) => {
+            {proxyOnly && (
+              <span className="text-xs px-2 py-1 rounded border border-border text-text-muted">
+                Proxy core only · optional [code]/[ml] extras disabled
+              </span>
+            )}
+            {availableExtras.map((extra) => {
               const installed = !!headroomExtras.extras[extra];
               const pending = pendingExtras.includes(extra);
               const extraTitle =
@@ -198,13 +205,19 @@ export default function TokenSaverSettings({
             </pre>
           )}
           <p className="text-xs text-text-muted mt-1">
-            Installing adds the package; use <code>on</code>/<code>off</code>{" "}
-            to activate it (restarts the proxy). Default install is{" "}
-            <code>[proxy]</code> only (SmartCrusher for JSON). Adding{" "}
-            <code>[code]</code> enables AST compression
-            (Python/JS/TS/Go/Rust/Java/C/C++/Perl). Adding <code>[ml]</code>{" "}
-            enables the Kompress-v2 HF model for prose/agentic traces but
-            adds ~1 GB (torch + huggingface-hub).
+            {proxyOnly
+              ? "This runtime uses [proxy] only (SmartCrusher for JSON). Optional [code]/[ml] extras are disabled to stay within the 512 MB memory budget."
+              : (
+                <>
+                  Installing adds the package; use <code>on</code>/<code>off</code>{" "}
+                  to activate it (restarts the proxy). Default install is{" "}
+                  <code>[proxy]</code> only (SmartCrusher for JSON). Adding{" "}
+                  <code>[code]</code> enables AST compression
+                  (Python/JS/TS/Go/Rust/Java/C/C++/Perl). Adding <code>[ml]</code>{" "}
+                  enables the Kompress-v2 HF model for prose/agentic traces but
+                  adds ~1 GB (torch + huggingface-hub).
+                </>
+              )}
           </p>
         </div>
       )}

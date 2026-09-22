@@ -9,5 +9,6 @@ cli/hooks/postinstall.js text eol=lf
 cli/scripts/*.cjs text eol=lf
 scripts/*.js text eol=lf
 scripts/*.cjs text eol=lf
+scripts/*.sh text eol=lf
 server.js text eol=lf
 tests/fixtures/fake-devin-acp.mjs text eol=lf

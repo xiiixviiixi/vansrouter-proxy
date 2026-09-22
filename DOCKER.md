@@ -75,7 +75,14 @@ Add options to the quick-start command:
 
 ## Optional Headroom sidecar
 
-Headroom is an optional sidecar service for tool-history safety and advanced request processing.
+The Docker runtime image now also embeds the lightweight `headroom-ai[proxy]`
+runtime and starts it next to VansRouter through `/entrypoint.sh`. The managed
+proxy binds only to `127.0.0.1:8787`, runs with telemetry/stateless/no-cache
+settings, and compression requests fail open after 2000 ms. Use the Token
+Saver toggle to enable or disable compression; optional `[code]`/`[ml]` extras
+stay disabled in this image.
+
+Headroom remains optional as a separate sidecar for non-Docker deployments.
 
 ### Option A: Docker Compose (Recommended)
 

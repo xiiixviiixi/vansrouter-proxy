@@ -69,7 +69,7 @@ export function useHeadroom({ patchSetting, setHeadroomEnabled, headroomUrl, set
     await patchSetting({ [extra === "code" ? "headroomCodeAware" : "headroomKompress"]: value }); if (!headroomStatus.running) return;
     setRestartingProxy(true); try { const res = await fetch("/api/headroom/restart", { method: "POST" }); const data = await res.json().catch(() => ({})); if (!res.ok) throw new Error(data.error || "Restart failed"); await refresh(); } catch (e) { setExtrasActionError(e.message); } finally { setRestartingProxy(false); }
   }, [headroomStatus.running, patchSetting, refresh, setCodeAware, setKompress]);
-  const toggleEnabled = (value) => { const nextUrl = headroomUrl.trim() || "http://localhost:8787"; setHeadroomUrl(nextUrl); setHeadroomEnabled(value); patchSetting({ headroomEnabled: value, headroomUrl: nextUrl }); };
-  const blurUrl = async () => { const next = headroomUrl.trim() || "http://localhost:8787"; setHeadroomUrl(next); await patchSetting({ headroomUrl: next }); refresh(); };
+  const toggleEnabled = (value) => { const nextUrl = headroomUrl.trim() || "http://127.0.0.1:8787"; setHeadroomUrl(nextUrl); setHeadroomEnabled(value); patchSetting({ headroomEnabled: value, headroomUrl: nextUrl }); };
+  const blurUrl = async () => { const next = headroomUrl.trim() || "http://127.0.0.1:8787"; setHeadroomUrl(next); await patchSetting({ headroomUrl: next }); refresh(); };
   return { headroomStatus, showInstallModal, setShowInstallModal, actionLoading, actionError, headroomExtras, pendingExtras, extrasActionLoading, extrasActionError, removingExtra, installLog, extrasConfirm, setExtrasConfirm, codeAware, kompress, restartingProxy, refresh, start, stop, startLogPolling, toggleExtraActive, installExtras, removeExtra, toggleEnabled, blurUrl, setPendingExtras };
 }

@@ -5,12 +5,14 @@ import {
   openaiToOpenAIResponsesRequest,
 } from "../translator/request/openai-responses.js";
 
-const DEFAULT_TIMEOUT_MS = 3000;
+const DEFAULT_TIMEOUT_MS = 2000;
+const MAX_TIMEOUT_MS = 2000;
 
 function normalizeTimeout(value) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  const parsed = typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : DEFAULT_TIMEOUT_MS;
+  return Math.min(parsed, MAX_TIMEOUT_MS);
 }
 
 function jsonBytes(value) {

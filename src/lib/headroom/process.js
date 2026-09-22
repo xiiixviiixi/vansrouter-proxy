@@ -8,8 +8,47 @@ const HEADROOM_DIR = path.join(DATA_DIR, "headroom");
 const PID_FILE = path.join(HEADROOM_DIR, "proxy.pid");
 const LOG_FILE = path.join(HEADROOM_DIR, "proxy.log");
 const INSTALL_LOG_FILE = path.join(HEADROOM_DIR, "install.log");
+const DISABLED_FILE = path.join(HEADROOM_DIR, "supervisor.disabled");
 const DEFAULT_PORT = 8787;
+const DEFAULT_HOST = "127.0.0.1";
 const STARTUP_TIMEOUT_MS = 8000;
+
+// Render/free-tier runtime installs only `headroom-ai[proxy]`. Proxy-only mode
+// keeps managed starts on the lightweight local profile and prevents optional
+// `[code]`/`[ml]` extras from changing the managed command line.
+export function isHeadroomProxyOnly() {
+  return process.env.HEADROOM_PROXY_ONLY === "true";
+}
+
+export function getHeadroomDisabledFile() {
+  return DISABLED_FILE;
+}
+
+function numberEnv(name, fallback, min, max) {
+  const parsed = Number.parseInt(process.env[name] || "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function headroomSpawnEnv() {
+  return {
+    ...process.env,
+    HEADROOM_STATELESS: process.env.HEADROOM_STATELESS || "true",
+    HEADROOM_TELEMETRY: process.env.HEADROOM_TELEMETRY || "off",
+    HEADROOM_NO_SUBSCRIPTION_TRACKING: process.env.HEADROOM_NO_SUBSCRIPTION_TRACKING || "1",
+  };
+}
+
+function noteManualStop() {
+  try {
+    ensureDir();
+    fs.writeFileSync(DISABLED_FILE, `stopped at ${new Date().toISOString()}\n`);
+  } catch { /* stopping must still succeed if the sentinel cannot be written */ }
+}
+
+function clearManualStop() {
+  try { if (fs.existsSync(DISABLED_FILE)) fs.unlinkSync(DISABLED_FILE); } catch { /* ignore */ }
+}
 
 function ensureDir() {
   if (!fs.existsSync(HEADROOM_DIR)) fs.mkdirSync(HEADROOM_DIR, { recursive: true });
@@ -37,23 +76,65 @@ export function isPidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+function pidMatchesHeadroom(pid) {
+  // Guard against stale PID files: on Linux, avoid treating an unrelated
+  // recycled PID as the managed proxy. Other platforms keep the liveness probe.
+  if (process.platform !== "linux") return true;
+  try {
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+    return cmdline.toLowerCase().includes("headroom");
+  } catch {
+    return false;
+  }
+}
+
 export function getManagedPid() {
   const pid = readPid();
-  return pid && isPidAlive(pid) ? pid : null;
+  if (!pid || !isPidAlive(pid)) return null;
+  if (!pidMatchesHeadroom(pid)) {
+    clearPid();
+    return null;
+  }
+  return pid;
 }
 
 // Build proxy CLI flags for the active compression extras. `[code]` (AST
 // compression) is off by default in headroom → pass --code-aware to turn it on;
 // `[ml]` (Kompress) is on by default → pass --disable-kompress to turn it off.
+// Proxy-only mode always disables both optional compression paths so the
+// managed daemon stays on the lightweight `[proxy]` core.
 function extrasProxyArgs({ codeAware, kompress } = {}) {
+  if (isHeadroomProxyOnly()) return ["--disable-kompress", "--disable-kompress-fallback"];
   const args = [];
   if (codeAware) args.push("--code-aware");
   if (kompress === false) args.push("--disable-kompress");
   return args;
 }
 
-export async function startHeadroomProxy({ port = DEFAULT_PORT, codeAware = false, kompress = true } = {}) {
+export function buildHeadroomProxyArgs({ port = DEFAULT_PORT, codeAware = false, kompress = true } = {}) {
   const safePort = Number(port) > 0 && Number(port) < 65536 ? Number(port) : DEFAULT_PORT;
+  return [
+    "proxy",
+    "--host", DEFAULT_HOST,
+    "--port", String(safePort),
+    "--no-telemetry",
+    "--stateless",
+    "--no-ccr",
+    "--no-cache",
+    "--no-rate-limit",
+    "--no-subscription-tracking",
+    ...extrasProxyArgs({ codeAware, kompress }),
+    "--workers", "1",
+    "--limit-concurrency", String(numberEnv("HEADROOM_LIMIT_CONCURRENCY", 8, 1, 64)),
+    "--max-connections", String(numberEnv("HEADROOM_MAX_CONNECTIONS", 16, 1, 128)),
+    "--max-keepalive", String(numberEnv("HEADROOM_MAX_KEEPALIVE", 4, 0, 64)),
+    "--keepalive-expiry", String(numberEnv("HEADROOM_KEEPALIVE_EXPIRY", 10, 0, 300)),
+    "--compression-max-workers", String(numberEnv("HEADROOM_COMPRESSION_MAX_WORKERS", 1, 1, 8)),
+    "--anthropic-pre-upstream-concurrency", String(numberEnv("HEADROOM_ANTHROPIC_PRE_UPSTREAM_CONCURRENCY", 2, 1, 16)),
+  ];
+}
+
+export async function startHeadroomProxy({ port = DEFAULT_PORT, codeAware = false, kompress = true } = {}) {
   const binary = findHeadroomBinary();
   if (!binary) {
     const err = new Error("Headroom CLI not installed");
@@ -65,15 +146,32 @@ export async function startHeadroomProxy({ port = DEFAULT_PORT, codeAware = fals
   if (existing) return { pid: existing, alreadyRunning: true };
 
   ensureDir();
+  clearManualStop();
+  if (process.env.HEADROOM_SUPERVISED === "1") {
+    // The container entrypoint owns the daemon lifecycle. Ask it to start by
+    // clearing a manual stop, then wait for the supervisor to publish the PID.
+    const deadline = Date.now() + 15000;
+    let supervisedPid = getManagedPid();
+    while (!supervisedPid && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      supervisedPid = getManagedPid();
+    }
+    if (!supervisedPid) {
+      const err = new Error("headroom supervisor did not start the proxy — see proxy.log");
+      err.code = "SUPERVISOR_FAILED";
+      throw err;
+    }
+    return { pid: supervisedPid, alreadyRunning: true };
+  }
   // spawn stdio requires fd numbers, not WriteStream objects.
   const outFd = fs.openSync(LOG_FILE, "a");
 
-  const args = ["proxy", "--port", String(safePort), ...extrasProxyArgs({ codeAware, kompress })];
+  const args = buildHeadroomProxyArgs({ port, codeAware, kompress });
   const child = spawn(binary, args, {
     stdio: ["ignore", outFd, outFd],
     detached: true,
     windowsHide: true,
-    env: { ...process.env },
+    env: headroomSpawnEnv(),
   });
 
   if (!child.pid) {
@@ -111,8 +209,12 @@ export async function startHeadroomProxy({ port = DEFAULT_PORT, codeAware = fals
 
 export function stopHeadroomProxy() {
   const pid = getManagedPid();
-  if (!pid) return { stopped: false, reason: "not_running" };
+  if (!pid) {
+    noteManualStop();
+    return { stopped: false, reason: "not_running" };
+  }
   try {
+    noteManualStop();
     process.kill(pid, "SIGTERM");
     // Give it a moment, then force if still alive.
     setTimeout(() => {

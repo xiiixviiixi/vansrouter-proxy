@@ -16,8 +16,8 @@ import {
 export default function TokenSaverClient() {
   const [rtkEnabled, setRtkEnabledState] = useState(true);
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
-  const [headroomUrl, setHeadroomUrl] = useState("http://localhost:8787");
-  const [headroomTimeoutMs, setHeadroomTimeoutMs] = useState(3000);
+  const [headroomUrl, setHeadroomUrl] = useState("http://127.0.0.1:8787");
+  const [headroomTimeoutMs, setHeadroomTimeoutMs] = useState(2000);
   const [cavemanEnabled, setCavemanEnabled] = useState(false);
   const [cavemanLevel, setCavemanLevel] = useState("full");
   const [ponytailEnabled, setPonytailEnabled] = useState(false);
@@ -185,7 +185,7 @@ export default function TokenSaverClient() {
 
   const handleHeadroomTimeoutBlur = () => {
     const raw = Math.round(Number(headroomTimeoutMs));
-    const next = Number.isFinite(raw) && raw > 0 ? raw : 3000;
+    const next = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 2000) : 2000;
     setHeadroomTimeoutMs(next);
     patchSetting({ headroomTimeoutMs: next });
   };
@@ -198,8 +198,8 @@ export default function TokenSaverClient() {
           const data = await res.json();
           setRtkEnabledState(data.rtkEnabled !== false);
           setHeadroomEnabled(!!data.headroomEnabled);
-          setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
-          if (typeof data.headroomTimeoutMs === "number") setHeadroomTimeoutMs(data.headroomTimeoutMs);
+          setHeadroomUrl(data.headroomUrl || "http://127.0.0.1:8787");
+          if (typeof data.headroomTimeoutMs === "number") setHeadroomTimeoutMs(Math.min(Math.max(Math.round(data.headroomTimeoutMs), 1), 2000));
           setCodeAware(data.headroomCodeAware === true);
           setKompress(data.headroomKompress !== false);
           setCavemanEnabled(!!data.cavemanEnabled);
@@ -382,7 +382,7 @@ export default function TokenSaverClient() {
               value={headroomUrl}
               onChange={(e) => setHeadroomUrl(e.target.value)}
               onBlur={handleHeadroomUrlBlur}
-              placeholder="http://localhost:8787"
+              placeholder="http://127.0.0.1:8787"
               className="font-mono text-sm"
             />
             <p className="text-xs text-text-muted">
@@ -396,11 +396,12 @@ export default function TokenSaverClient() {
               value={String(headroomTimeoutMs)}
               onChange={(e) => setHeadroomTimeoutMs(e.target.value)}
               onBlur={handleHeadroomTimeoutBlur}
-              placeholder="3000"
+              placeholder="2000"
               className="font-mono text-sm"
             />
             <p className="text-xs text-text-muted">
-              Request timeout in milliseconds. Defaults to 3000 ms.
+              Request timeout in milliseconds. Capped at 2000 ms; slower
+              compression fails open and sends the original payload.
             </p>
           </div>
           {headroomManaged ? (
@@ -438,13 +439,13 @@ export default function TokenSaverClient() {
               <p className="text-sm font-medium">Install then click Start:</p>
               <div className="flex items-center gap-2">
                 <pre className="flex-1 rounded bg-black/5 dark:bg-white/5 p-2 text-xs font-mono overflow-x-auto">
-                  {`pip install "headroom-ai[proxy]"`}
+                  {`pip install --no-cache-dir "headroom-ai[proxy]"`}
                 </pre>
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() =>
-                    copy(`pip install "headroom-ai[proxy]"`)
+                    copy(`pip install --no-cache-dir "headroom-ai[proxy]"`)
                   }
                 >
                   {copied ? "Copied" : "Copy"}

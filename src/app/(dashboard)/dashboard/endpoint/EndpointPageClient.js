@@ -50,7 +50,7 @@ export default function APIPageClient() {
   const [tunnelDashboardAccess, setTunnelDashboardAccess] = useState(false);
   const [rtkEnabled, setRtkEnabledState] = useState(true);
   const [headroomEnabled, setHeadroomEnabled] = useState(false);
-  const [headroomUrl, setHeadroomUrl] = useState("http://localhost:8787");
+  const [headroomUrl, setHeadroomUrl] = useState("http://127.0.0.1:8787");
   const [headroomCompressUserMessages, setHeadroomCompressUserMessages] = useState(false);
   const [headroomStatus, setHeadroomStatus] = useState({ installed: false, running: false, python: null, loading: true });
   const [showHeadroomInstallModal, setShowHeadroomInstallModal] = useState(false);
@@ -276,7 +276,7 @@ export default function APIPageClient() {
         setTunnelDashboardAccess(data.tunnelDashboardAccess || false);
         setRtkEnabledState(data.rtkEnabled !== false);
         setHeadroomEnabled(!!data.headroomEnabled);
-        setHeadroomUrl(data.headroomUrl || "http://localhost:8787");
+        setHeadroomUrl(data.headroomUrl || "http://127.0.0.1:8787");
         setHeadroomCompressUserMessages(!!data.headroomCompressUserMessages);
         refreshHeadroomStatus();
         setCavemanEnabled(!!data.cavemanEnabled);
@@ -376,14 +376,14 @@ export default function APIPageClient() {
   };
 
   const handleHeadroomEnabled = (value) => {
-    const nextUrl = headroomUrl.trim() || "http://localhost:8787";
+    const nextUrl = headroomUrl.trim() || "http://127.0.0.1:8787";
     setHeadroomUrl(nextUrl);
     setHeadroomEnabled(value);
     patchSetting({ headroomEnabled: value, headroomUrl: nextUrl });
   };
 
   const handleHeadroomUrlBlur = async () => {
-    const next = headroomUrl.trim() || "http://localhost:8787";
+    const next = headroomUrl.trim() || "http://127.0.0.1:8787";
     setHeadroomUrl(next);
     await patchSetting({ headroomUrl: next });
     refreshHeadroomStatus();
@@ -1958,7 +1958,7 @@ export default function APIPageClient() {
               value={headroomUrl}
               onChange={(e) => setHeadroomUrl(e.target.value)}
               onBlur={handleHeadroomUrlBlur}
-              placeholder="http://localhost:8787"
+              placeholder="http://127.0.0.1:8787"
               className="font-mono text-sm"
             />
             <p className="text-xs text-text-muted">
@@ -1983,8 +1983,8 @@ export default function APIPageClient() {
             <div className="flex flex-col gap-1">
               <p className="text-sm font-medium">Install then click Start:</p>
               <div className="flex items-center gap-2">
-                <pre className="flex-1 rounded bg-black/5 dark:bg-white/5 p-2 text-xs font-mono overflow-x-auto">{`pip install "headroom-ai[proxy]"`}</pre>
-                <Button size="sm" variant="ghost" onClick={() => copy(`pip install "headroom-ai[proxy]"`)}>
+                <pre className="flex-1 rounded bg-black/5 dark:bg-white/5 p-2 text-xs font-mono overflow-x-auto">{`pip install --no-cache-dir "headroom-ai[proxy]"`}</pre>
+                <Button size="sm" variant="ghost" onClick={() => copy(`pip install --no-cache-dir "headroom-ai[proxy]"`)}>
                   {copied ? "Copied" : "Copy"}
                 </Button>
               </div>

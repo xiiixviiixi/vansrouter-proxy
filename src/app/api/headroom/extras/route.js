@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { findPython310, getInstalledHeadroomExtras, HEADROOM_COMPRESSION_EXTRAS } from "@/lib/headroom/detect";
-import { installHeadroomExtras, uninstallHeadroomExtras, getInstallLogTail } from "@/lib/headroom/process";
+import { installHeadroomExtras, uninstallHeadroomExtras, getInstallLogTail, isHeadroomProxyOnly } from "@/lib/headroom/process";
 
 export const dynamic = "force-dynamic";
 
@@ -12,8 +12,18 @@ export async function GET(req) {
     }
     const python = findPython310();
     const status = getInstalledHeadroomExtras(python);
+    if (isHeadroomProxyOnly()) {
+      return NextResponse.json({
+        available: [],
+        proxyOnly: true,
+        installed: status.installed,
+        version: status.version,
+        extras: { code: false, ml: false },
+      });
+    }
     return NextResponse.json({
       available: HEADROOM_COMPRESSION_EXTRAS,
+      proxyOnly: false,
       ...status,
     });
   } catch (error) {
@@ -23,6 +33,9 @@ export async function GET(req) {
 
 export async function POST(req) {
   try {
+    if (isHeadroomProxyOnly()) {
+      return NextResponse.json({ error: "Optional Headroom extras are disabled in proxy-only runtime", code: "PROXY_ONLY" }, { status: 403 });
+    }
     const body = await req.json().catch(() => ({}));
     const requested = Array.isArray(body?.extras) ? body.extras : [];
     const result = await installHeadroomExtras(requested);
@@ -35,6 +48,9 @@ export async function POST(req) {
 
 export async function DELETE(req) {
   try {
+    if (isHeadroomProxyOnly()) {
+      return NextResponse.json({ error: "Optional Headroom extras are disabled in proxy-only runtime", code: "PROXY_ONLY" }, { status: 403 });
+    }
     const body = await req.json().catch(() => ({}));
     const requested = Array.isArray(body?.extras) ? body.extras : [];
     const result = await uninstallHeadroomExtras(requested);

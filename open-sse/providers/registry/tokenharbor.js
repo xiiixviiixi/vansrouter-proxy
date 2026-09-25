@@ -1,0 +1,65 @@
+export default {
+  id: "tokenharbor",
+  priority: 118,
+  alias: "tokenharbor",
+  uiAlias: "tokenharbor",
+  aliases: ["th", "tokenharbor"],
+  display: {
+    name: "Token Harbor",
+    icon: "anchor",
+    color: "#10B981",
+    textIcon: "TH",
+    website: "https://tokenharbor.ai",
+    notice: {
+      apiKeyUrl: "https://tokenharbor.ai/dashboard",
+    },
+  },
+  category: "apikey",
+  transport: {
+    baseUrl: "https://tokenharbor.ai/v1/chat/completions",
+    validateUrl: "https://tokenharbor.ai/v1/models",
+  },
+  transports: [
+    {
+      format: "openai",
+      baseUrl: "https://tokenharbor.ai/v1/chat/completions",
+      auth: { combined: true, header: "Authorization", scheme: "bearer" },
+    },
+    {
+      format: "claude",
+      baseUrl: "https://tokenharbor.ai/v1/messages",
+      auth: {
+        combined: true,
+        header: "x-api-key",
+        scheme: "raw",
+        anthropicVersion: true,
+      },
+    },
+    {
+      format: "openai-responses",
+      baseUrl: "https://tokenharbor.ai/v1/responses",
+      auth: { combined: true, header: "Authorization", scheme: "bearer" },
+    },
+  ],
+  serviceKinds: ["llm", "image"],
+  imageConfig: {
+    baseUrl: "https://tokenharbor.ai/v1/images/generations",
+  },
+  models: [
+    { id: "th-orchestra", name: "TokenHarbor Orchestra" },
+    { id: "claude-opus-5", name: "Claude Opus 5" },
+    { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
+    { id: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
+    { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+    { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+    { id: "glm-5.2", name: "GLM 5.2" },
+    { id: "gpt-5.4", name: "GPT-5.4" },
+    { id: "gpt-5.5", name: "GPT-5.5" },
+    { id: "gemini-3-flash", name: "Gemini 3 Flash" },
+    { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+    { id: "minimax-m3", name: "MiniMax M3" },
+    { id: "qwen3.7-max", name: "Qwen 3.7 Max" },
+  ],
+  modelsFetcher: { url: "https://tokenharbor.ai/v1/models", type: "openai" },
+  passthroughModels: true,
+};

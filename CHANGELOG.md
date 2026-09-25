@@ -1,3 +1,105 @@
+# v0.91.33 (2026-09-25)
+
+## Features
+
+- **TokenHarbor provider integration** — Added `tokenharbor` provider (`open-sse/providers/registry/tokenharbor.js`, priority `118`, alias `th`/`tokenharbor`), connecting to `https://tokenharbor.ai/v1`. Supports multi-transport routing across standard OpenAI `/v1/chat/completions`, native Claude `/v1/messages` (with `x-api-key` and `anthropic-version`), OpenAI Responses `/v1/responses`, and image generations `/v1/images/generations`. Includes native model catalog (`th-orchestra`, `claude-opus-5`, `claude-sonnet-5`, `deepseek-v4-flash`, etc.) with passthrough model support and dynamic catalog fetch from `https://tokenharbor.ai/v1/models`.
+
+## Reliability & Compatibility
+
+- **Cursor ConnectRPC trailer error handling (Issue #131)** — Fixed silent 0-token empty turn responses (`OUT 0`, `content: null`) in `open-sse/executors/cursor.js`. Previously, `decodeAgentFrames` dropped ConnectRPC trailer frames (`flags & 0x02`), silently discarding upstream error responses (e.g., quota exhaustion, rate limits, or free tier restrictions) as empty success. ConnectRPC trailer error frames are now parsed and surfaced properly as HTTP 429/400 errors.
+- **Cursor model resolution in executeAgent** — Resolved upstream model targeting in `executeAgent` via `resolveCursorUpstreamModel(model)` so `"default"` and `"cu/default"` map to `claude-4.5-sonnet` instead of forwarding an unmapped placeholder to the backend.
+- **Cursor client fingerprint update** — Bumped `x-cursor-client-version` to `3.13.25` and `x-cursor-client-commit` to `d5c0e77a0214208f36b56d42e8e787de88d02ea4` in `open-sse/utils/cursorChecksum.js` and `open-sse/providers/registry/cursor.js` to match current Cursor IDE releases.
+- **Cursor direct HTTP/2 catalog fetch** — Eliminated doomed HTTP/1 `fetch()` attempt against HTTP/2-only `agent.api5.cursor.sh` in `open-sse/services/cursorModels.js`, connecting directly via HTTP/2 multiplexing.
+- **Cursor token expiration check** — `testOAuthConnection` in `src/app/api/providers/[id]/test/testUtils.js` now validates the JWT `exp` claim for Cursor credentials, rejecting expired tokens immediately instead of false-positive passes.
+- **Cursor Agent Protobuf defensive decoding** — Guarded map pair decoding in `open-sse/utils/cursorAgentProtobuf.js` to handle malformed protobuf frames safely.
+
+## Tests
+
+- Added `tests/unit/tokenharbor-provider.test.js` verifying provider transport registration, authentication headers, and aliases.
+- Added `tests/unit/cursor-test-connection.test.js` validating JWT expiration checking for Cursor auth.
+- Extended `tests/unit/cursor-agent-proto.test.js` with ConnectRPC trailer error parsing and model resolution test cases.
+- Updated `tests/unit/cursor-models.test.js` with direct HTTP/2 mock verification and refreshed golden header snapshots for v0.91.33.
+
+# v0.91.32 (2026-09-24)
+
+## Reliability & Performance
+
+- **LoopGuard event loop freeze fix (Issue #132)** — Resolved an $O(N^4)$ polynomial search trap in `open-sse/utils/loopGuard.js` where `detectSequenceRepeat` previously performed unconstrained combinatorial window slicing across all historical messages in long agent sessions (>600 messages / >700KB bodies), freezing Node.js's main event loop for >160 seconds and causing container termination (exitCode=137 by Docker watchdog). Bounded sequence detection to `RECENT_TOOL_WINDOW = 40` and `MAX_SEQUENCE_LENGTH = 6`. Execution time on 1,200 messages dropped from 165,557ms to 25ms.
+- **LoopGuard deep-key argument normalization** — `normalizeArgs` now uses recursive object key sorting instead of `JSON.stringify(obj, keys)` array replacers (which stripped nested properties by ECMAScript spec), preventing distinct tool calls with nested arguments from falsely colliding and triggering loop aborts.
+- **LoopGuard per-message sentence deduplication** — `detectTextRepeat` wraps sentence counts per message in a unique `Set`, preventing intra-turn markdown tables, repeated list bullets, or separator rows within a single assistant message from falsely triggering loop detection. Messages larger than 4KB (code/diff dumps) skip sentence-level splitting to prevent main-thread regex spikes.
+- **Provider format detection optimization** — In `open-sse/services/provider.js`, replaced synchronous `body.messages.flatMap()` and triple `.some()` scans on multimodal payloads with a short-circuiting `for..of` loop with early exit on first image or tool match, eliminating massive heap allocations and CPU latency on large histories.
+- **Linux runtime detection fix (Issue #141)** — Removed the `/run/systemd/system` filesystem check in `src/shared/utils/runtime.js` that previously caused ordinary interactive terminal sessions on Linux to be falsely detected as systemd services. Runtime detection now checks `INVOCATION_ID` or `JOURNAL_STREAM`, returning `"direct"` for terminal executions and preventing unintended `sudo systemctl restart` commands.
+
+## Tests
+
+- Extended `tests/unit/loop-guard.test.js` with 1,200-message / 600-tool-call performance benchmarks (<50ms limit), nested argument preservation assertions, and intra-message table repeat tolerance tests.
+- Updated `tests/unit/runtime-detect.test.js` to assert `"direct"` runtime for interactive Linux shells.
+- Refreshed version-bearing golden headers for 0.91.32. Full suite passes: 304 files passed / 13 skipped, 3524 tests passed, 0 failures.
+
+# v0.91.31 (2026-09-24)
+
+## Features
+
+- **OpenCode Zen keyed lane** — `OpenCodeExecutor` now serves both OpenCode providers: the keyless free lane (`opencode`) and the keyed Zen lane (`opencode-zen`, aliases `ocz`). The executor carries the official-client fingerprint (pinned `opencode/1.18.31` User-Agent, canonical `ses_`/`msg_` ids, cloaked bash/glob/grep/read tool quartet) while sending the user's own API key instead of `Bearer public`, so paid Zen models work without the free tier's client-identity 403. Lane routing picks `/zen/v1/chat/completions`, `/zen/v1/messages` or `/zen/v1/responses` from the source-format transport chatCore selected, falling back to the model's declared registry format; responses-only models never downgrade, and the Claude transport applies its own `x-api-key` + `anthropic-version` contract.
+
+## Reliability & Compatibility
+
+- **Forced upstream streaming** — `opencode-zen` declares `forceStream: true`, mirroring the free lane: Zen's free tier rejects non-streaming bodies, so chatCore forces SSE upstream and aggregates it back to JSON for non-stream clients. `transformRequest` also pins `body.stream` from the transport's stream flag because the identity openai-to-openai translator never writes it.
+- **Free-tier limit messages** — the IP-limit 429/403 rewrite is now scoped to the keyless free lane (`provider === "opencode"`); keyed-lane errors keep the upstream text.
+
+## Release Infrastructure
+
+- **Dockerfile ownership scope** — the runtime stage now chowns only the writable paths (`/app/data`, `/app/data-home`, `/app/.next`) instead of all of `/app`, keeping the same write access for the `node` process while avoiding a recursive chown over `node_modules`.
+
+## Code Quality
+
+- **Shared auth application** — `applyAuth`/`setAuth` moved from `open-sse/executors/default.js` into `open-sse/providers/shared.js` and reused by `default.js`, `opencode.js` and `opencode-go.js`, deleting three copies of the scheme/`anthropicVersion` branch. Registry `transport.auth` descriptors remain the single source of truth.
+- **Registry-driven lane URLs** — `OpenCodeExecutor.buildUrl` resolves the keyed lane's endpoint through `resolveTransport(provider, format)` instead of re-hardcoding the `/zen/v1/*` paths next to the registry.
+- **Shared OpenCode helpers** — `baseModelId` and the Responses-lane reasoning normaliser moved to `open-sse/utils/opencodeIdentity.js`, removing byte-identical copies in `opencode.js` and `opencode-go.js`.
+- **Dead code and dead dependency** — deleted `open-sse/executors/antigravity/sseCollect.js` (149 lines) and `open-sse/handlers/responsesHandler.js` (99 lines), neither referenced by runtime code, and dropped the unused `uuid` dependency (zero imports; `crypto.randomUUID()` is used where an id is needed).
+
+## Tests
+
+- Added `tests/unit/opencode-zen-executor.test.js` (executor registration under id and alias, forced streaming, `body.stream` pinning, keyed fingerprint headers, tool-quartet cloaking, lane URL routing, Claude transport auth, keyless free lane).
+- Extended `tests/unit/opencode-session.test.js` with the free lane's `forceStream` registry contract and refreshed the version-bearing golden headers for 0.91.31.
+- Full suite on the release commit: 304 files passed / 13 skipped, 3519 tests passed / 82 skipped, 0 failures (`npx vitest run -c tests/vitest.config.js`); `node scripts/build.js` completed with `build complete`. Provider behaviour is covered by unit-level wire assertions only — no live OpenCode Zen account was exercised for this release.
+
+# v0.91.30 (2026-09-23)
+
+## Features
+
+- **Upstream sync queue** — Landed the 28-item adoption queue from the `83af3f18` → `21583c03e` (v0.5.85) triage: provider and model coverage, translator and stream fixes, capability metadata, CLI-tool cards, analytics, combo presets, and the Qoder, CommandCode, OpenCode, Antigravity, Kiro and Cursor provider fixes. Every item was classified ADOPT / SKIP / HYBRID against the fork's custom logic before landing, and the triage reports are committed under `.docs/audit/`.
+- **Claude 5 generation and CLI-tool model defaults** — `open-sse/providers/registry/claude.js` now declares `claude-opus-5`, `claude-sonnet-5`, `claude-fable-5` and `claude-fable-5-1` alongside the existing 4.x rows (appended, so the provider default model is unchanged). The Claude Code CLI defaults already wrote `cc/claude-fable-5` and `cc/claude-sonnet-5` while the registry declared neither, so those ids never appeared in the model list. A new catalog invariant fails whenever a provider-qualified CLI-tool default names a model the catalog does not declare; it immediately caught the inherited dead default `gemini/gemini-3.1-pro` (upstream has the same bug), now pointed at the declared `gemini-3.1-pro-preview`.
+- **Provider registry parity** — Added the verified-missing upstream rows: Baidu +7, TokenRouter +22, API Airforce +3, Xiaomi MiMo +2, CommandCode +11 and Qoder +5 (whose `qmodel_38max` and `qfmodel` were already referenced by the context-tier helper and its tests while the registry lagged), plus a new `qoder-cn` provider copied byte-identical from upstream and registered as `p148`.
+- **Deliberately not adopted, and why** — OpenCode Zen keyed-lane `-free` ids stay out of the catalog until the fingerprint executor lands (`tests/unit/opencode-zen-models.test.js:116`), CodeBuddy CN stays in exact parity with CodeBuddy International (`tests/unit/codebuddy-intl-capabilities.test.js:13`) while upstream's two lists differ, and `devin-cli` keeps its intentionally empty model list (model validity belongs to the installed Devin CLI/ACP).
+- **CLI tools** — Added `pi`, `omp`, `crush`, `forge`, `smelt` and `codewhale` settings routes with a generic card, then collapsed the repeated plumbing: 19 copies of the `where`/`which` install probe and 11 copies of the JSONC reader now share two primitives in `src/app/api/cli-tools/_shared/cliConfig.js` (35 lines), taking the rewritten routes from 3008 to 2460 lines. Shared primitives were chosen over a callback-style route factory because the routes differ materially (JSON vs TOML vs YAML, different paths and defaults).
+- **Combos** — Cursor and Claude presets with bulk edit actions, combo capability aggregation into `/v1/models`, and the vision capability surfaced in the combo editor. The dashboard carried a drifted 222-line copy of `ComboFormModal` (the vision work landed only there); the canonical `src/shared/components/ComboFormModal.js` now owns that behaviour and the page dropped from 975 to 647 lines.
+- **Usage and analytics** — Requests mode with provider and model breakdowns and an all-time period, a real Ollama quota tracker with the free-plan monthly window, DeepSeek credit balance shown as currency, and a bounded `lastUsed` scan.
+- **Models and providers** — `deepseek-v4.1-flash` with effort levels and vision, per-gateway catalog scoping, the Claude Code `[1m]` marker with the auto-compact window, the OpenCode Zen API-key provider, the HuggingFace Inference Providers router with `sttConfig`, self-hosted embedding/STT/TTS registry entries, Qoder context-tier escalation, the Antigravity weekly quota window, CommandCode capability declarations, and OpenCode decoy-tool cloaking with Muse tool-choice normalisation.
+- **Localisation** — The Persian locale is registered (`LOCALES`, the switcher map and a collapsed `normalizeLocale`), so `public/i18n/literals/fa.json` is reachable instead of being coerced to English.
+
+## Reliability & Compatibility
+
+- **Content-filter refusals are policy errors, not provider failures** — The moderation wordings a relay can return (`Content Exists Risk`, `sensitive words detected`, `sensitive content`, `content-blocked`) now classify as a non-fallback policy refusal. Because text rules are matched before status rules, a refusal arriving on a 5xx or 429 no longer cools the account down, and `checkFallbackError` reports `isContentFilter` so callers can tell a refusal from a transport failure. The result field is named `isPolicyError`, which is what `classifyError()` reads — it previously emitted `policyError`, so the flag had no reader. Refusals are also kept out of provider-failure accounting: five of them on a failure-eligible status could open the circuit breaker and block every account on that provider. The gateway error log (`open-sse/utils/errorLog.js`) is now wired into the provider-error branch, so a refusal is recorded as `POLICY` and a transport failure as `PROVIDER`.
+- **Request body ceilings on every entry point** — A shared bounded reader rejects an oversized body with 413 before parsing, reads the stream rather than buffering `request.text()`, counts bytes accurately rather than UTF-16 length, and is used by the chat, responses, embeddings, TTS, search, fetch and image handlers. RTK sizes a request without serialising it.
+- **Account and auth hygiene** — A request-scoped 4xx no longer cools down a healthy account (a single-connection pool used to answer every later request with a copy of the first error), and re-validation clears stale connection health state.
+- **Streaming and translation** — Aborts are reported in-band after a 200 response instead of as a transport error, usage is reported on `response.completed`, a Claude refusal maps to `content_filter`, replayed reasoning fields are dropped for Groq, Mistral and Cerebras, and the duplicated Kiro tool-name restore logic now has one helper in `translator/concerns/`.
+- **Provider paths** — Cursor no longer produces AgentService empty turns or silent tool hangs, and its dated model ids resolve through one lookup; Antigravity stops sending `requestType: agent` (which made Google return a detail-free 429) and keeps its weekly quota window; the MITM passthrough strips Gemini schema keywords the upstream rejects; OpenCode keeps free-tier session and request ids stable and resolves its lane from the registry instead of a hardcoded model set.
+- **Fork invariants preserved** — ACL per API key (`allowedProviders` / `allowedCombos` / `allowedKinds`), ZCode, VansAI branding, the SearXNG fallback, the persistent `9router-data` volume and `src/mitm/` are untouched across the range. Evidence: the ACL regression lock (7 files, 134 tests) is green.
+- **Maintainability** — The Antigravity thought-signature store lost its write-only half (the KV mirror and the async reader with zero call sites: 199 → 88 lines), the usage charts share one `fmtTokens`, and dead weight went: three `propTypes` blocks React 19 ignores, an ignored `responseModel` parameter, `chalk`/`commander`/`ws` (zero imports under `cli/`) and `uuid` (replaced by six lines of `node:crypto` producing byte-identical UUIDv5 output).
+
+## Repository hygiene
+
+- One-time CRLF → LF blob normalisation for files the range touched, so a review diff should be read with `--ignore-cr-at-eol`; `git diff --check origin/main..HEAD` is clean.
+- `cli/hooks/trayRuntime.js` no longer reports dirty: the worktree file was byte-identical to its blob while `.gitattributes` declares `*.js eol=crlf`, so every checkout looked modified until the blob was normalised.
+- Audit material consolidated: the stale June RCA series and raw smoke dumps are gone (three files cited by code or tests were kept), and the upstream triage plus the local-change audits are committed under `.docs/audit/`.
+
+## Tests & Verification
+
+- Full Vitest suite at the release SHA: **303 files passed, 0 failed, 13 skipped; 3510+ tests passed, 82 skipped** (deploy-atomic fixed, golden headers refreshed).
+- Lint gates: `node scripts/lint-undef.cjs` and `node scripts/lint-reacthooks.cjs` both clean.
+- ACL regression lock: **7 files, 134 tests passed**.
+
 # v0.91.22 (2026-09-14)
 
 ## Features

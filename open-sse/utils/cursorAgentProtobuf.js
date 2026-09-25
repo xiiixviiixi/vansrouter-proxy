@@ -46,14 +46,16 @@ export function decodeAgentValue(data) {
     const result = {};
     for (const entry of decodeMessage(fields.get(VALUE.STRUCT)[0].value).get(1) || []) {
       const pair = decodeMessage(entry.value);
-      result[textDecoder.decode(pair.get(1)[0].value)] = decodeAgentValue(pair.get(2)[0].value);
+      const keyBytes = pair.get(1)?.[0]?.value;
+      const valBytes = pair.get(2)?.[0]?.value;
+      if (keyBytes && valBytes) result[textDecoder.decode(keyBytes)] = decodeAgentValue(valBytes);
     }
     return result;
   }
   if (fields.has(VALUE.LIST)) {
     return (decodeMessage(fields.get(VALUE.LIST)[0].value).get(1) || []).map((item) => decodeAgentValue(item.value));
   }
-  return undefined;
+  return null;
 }
 
 export function encodeMcpToolDefinition(tool) {
@@ -79,7 +81,9 @@ export function decodeMcpArgs(data) {
   const args = {};
   for (const entry of fields.get(2) || []) {
     const pair = decodeMessage(entry.value);
-    args[textDecoder.decode(pair.get(1)[0].value)] = decodeAgentValue(pair.get(2)[0].value);
+    const keyBytes = pair.get(1)?.[0]?.value;
+    const valBytes = pair.get(2)?.[0]?.value;
+    if (keyBytes && valBytes) args[textDecoder.decode(keyBytes)] = decodeAgentValue(valBytes);
   }
   return {
     name: textDecoder.decode(fields.get(1)?.[0]?.value || new Uint8Array()),

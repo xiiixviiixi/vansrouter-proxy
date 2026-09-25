@@ -89,7 +89,8 @@ export function createSSEStream(options = {}) {
     body = null,
     onStreamComplete = null,
     apiKey = null,
-    normalizeKimiToolCalls = null
+    normalizeKimiToolCalls = null,
+    credentials = null
   } = options;
 
   let buffer = "";
@@ -103,7 +104,15 @@ export function createSSEStream(options = {}) {
   // Per-stream decoder with stream:true to correctly handle multi-byte chars split across chunks
   const decoder = new TextDecoder("utf-8", { fatal: false });
 
-  const state = mode === STREAM_MODE.TRANSLATE ? { ...initState(sourceFormat), provider, toolNameMap, model } : null;
+  const state = mode === STREAM_MODE.TRANSLATE
+    ? { ...initState(sourceFormat), provider, toolNameMap, model,
+        // Format the upstream speaks. A response translator reached directly
+        // (target === its registered source) can defer its terminal event until
+        // the final flush; as the second hop of a pivot it must not. Undefined
+        // means "unknown" → do not defer.
+        targetFormat }
+    : null;
+  if (state) state.sessionId = credentials?._clientSessionId || null;
 
   let totalContentLength = 0;
   let accumulatedContent = "";
@@ -676,7 +685,7 @@ export function createSSEStream(options = {}) {
   });
 }
 
-export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, normalizeKimiToolCalls = null) {
+export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, normalizeKimiToolCalls = null, credentials = null) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
     targetFormat,
@@ -689,7 +698,8 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
     body,
     onStreamComplete,
     apiKey,
-    normalizeKimiToolCalls
+    normalizeKimiToolCalls,
+    credentials
   });
 }
 

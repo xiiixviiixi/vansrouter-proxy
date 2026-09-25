@@ -38,7 +38,11 @@ import {
 } from "../../config/kiroConstants.js";
 import { DEFAULT_IMAGE_MIME } from "../schema/index.js";
 import { ROLE, CLAUDE_BLOCK } from "../schema/index.js";
-import { canonicalizeKiroConversation, normalizeKiroToolSpecs } from "../concerns/kiroConversation.js";
+import {
+  canonicalizeKiroConversation,
+  normalizeKiroToolSpecs,
+  kiroEmptyUserContent,
+} from "../concerns/kiroConversation.js";
 
 /** Stringify a tool_use input as a readable line. */
 function toolUseToText(name, input) {
@@ -109,7 +113,8 @@ function convertClaudeMessagesToKiro(messages, tools, model) {
 
   const flushPending = () => {
     if (currentRole === ROLE.USER) {
-      const content = pendingUserContent.join("\n\n").trim() || "continue";
+      const content = pendingUserContent.join("\n\n").trim()
+        || kiroEmptyUserContent(pendingToolResults.length > 0);
       const userMsg = { userInputMessage: { content, modelId: model } };
 
       if (pendingImages.length > 0) {
@@ -162,11 +167,21 @@ function convertClaudeMessagesToKiro(messages, tools, model) {
             if (typeof block.content === "string") {
               resultContent = block.content;
             } else if (Array.isArray(block.content)) {
+              // Images a tool returned (screenshots) ride along as user images;
+              // Kiro tool results are text-only.
+              let hasImage = false;
+              for (const c of block.content) {
+                if (c?.type === CLAUDE_BLOCK.IMAGE && c.source?.type === "base64") {
+                  hasImage = true;
+                  const mediaType = c.source.media_type || DEFAULT_IMAGE_MIME;
+                  pendingImages.push({ format: mediaType.split("/")[1] || mediaType, source: { bytes: c.source.data } });
+                }
+              }
               resultContent =
                 block.content
                   .filter((c) => c.type === CLAUDE_BLOCK.TEXT)
                   .map((c) => c.text)
-                  .join("\n") || JSON.stringify(block.content);
+                  .join("\n") || (hasImage ? "(image attached)" : JSON.stringify(block.content));
             } else if (block.content) {
               resultContent = JSON.stringify(block.content);
             }
@@ -466,6 +481,14 @@ export function claudeToKiroRequest(model, body, stream, credentials) {
     value: upstreamModel,
     enumerable: false,
   });
+
+  // Kiro tool specs get sanitized names (`mcp.a.b` → `mcp_a_b`); keep the reverse
+  // map so tool calls come back under the client's own names.
+  const restoredToolNames = new Map();
+  for (const [original, sanitized] of nameMap) {
+    if (original !== sanitized) restoredToolNames.set(sanitized, original);
+  }
+  if (restoredToolNames.size) payload._toolNameMap = restoredToolNames;
 
   return payload;
 }

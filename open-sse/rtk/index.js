@@ -1,5 +1,6 @@
 // RTK port: compress tool_result content in LLM request bodies
-// Injected at the top of translateRequest (before any format translation)
+// Applied in chatCore: on the source-format body for Cursor (its translator folds
+// tool results into user XML), post-translate for every other provider.
 import { RAW_CAP, MIN_COMPRESS_SIZE } from "./constants.js";
 import { autoDetectFilter } from "./autodetect.js";
 import { safeApply } from "./applyFilter.js";
@@ -8,11 +9,17 @@ let _rtkEnabled = false;
 export function setRtkEnabled(v) { _rtkEnabled = !!v; }
 export function isRtkEnabled() { return _rtkEnabled; }
 
+// The per-message sync pass is what stalls the event loop on ~700 KB agent
+// sessions, so skip compression entirely above this size. Override per deployment.
+export const RTK_MAX_BODY_BYTES = parseInt(process.env.NINEROUTER_RTK_MAX_BYTES || "", 10) || 512 * 1024;
+
 // Compress tool_result content in-place. Returns stats or null if disabled/failed.
-export function compressMessages(body, enabled) {
+export function compressMessages(body, enabled, bytes) {
   if (enabled === undefined) enabled = _rtkEnabled;
   if (!enabled) return null;
   if (!body) return null;
+  const bodyBytes = Number.isFinite(bytes) ? bytes : estimateBodyBytes(body);
+  if (bodyBytes > RTK_MAX_BODY_BYTES) return null;
 
   // Kiro format: conversationState.history + conversationState.currentMessage
   if (body.conversationState) {
@@ -90,6 +97,23 @@ export function compressMessages(body, enabled) {
     return null;
   }
   return stats;
+}
+
+// Estimate string content plus per-item overhead without serializing the body.
+function estimateBodyBytes(body) {
+  const items = Array.isArray(body?.messages) ? body.messages : Array.isArray(body?.input) ? body.input : null;
+  if (!items) return estimateStringBytes(body);
+  let bytes = 0;
+  for (const item of items) bytes += 32 + estimateStringBytes(item);
+  return bytes;
+}
+
+function estimateStringBytes(value) {
+  if (typeof value === "string") return value.length;
+  if (!value || typeof value !== "object") return 0;
+  let bytes = 0;
+  for (const key in value) bytes += estimateStringBytes(value[key]);
+  return bytes;
 }
 
 // Compress Kiro format: conversationState.history[].userInputMessage.userInputMessageContext.toolResults[].content[].text

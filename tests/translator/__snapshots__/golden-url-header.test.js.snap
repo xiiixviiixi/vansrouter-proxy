@@ -455,10 +455,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > cline → headers (a
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "VansRouter/0.91.22",
+    "User-Agent": "VansRouter/0.91.33",
     "X-CLIENT-TYPE": "vansrouter",
-    "X-CLIENT-VERSION": "0.91.22",
-    "X-CORE-VERSION": "0.91.22",
+    "X-CLIENT-VERSION": "0.91.33",
+    "X-CORE-VERSION": "0.91.33",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "<ENV>",
@@ -468,10 +468,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > cline → headers (a
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "VansRouter/0.91.22",
+    "User-Agent": "VansRouter/0.91.33",
     "X-CLIENT-TYPE": "vansrouter",
-    "X-CLIENT-VERSION": "0.91.22",
-    "X-CORE-VERSION": "0.91.22",
+    "X-CLIENT-VERSION": "0.91.33",
+    "X-CORE-VERSION": "0.91.33",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "<ENV>",
@@ -482,10 +482,10 @@ exports[`GOLDEN buildHeaders (default executor providers) > cline → headers (a
     "Authorization": "Bearer <TOK>",
     "Content-Type": "application/json",
     "HTTP-Referer": "https://cline.bot",
-    "User-Agent": "VansRouter/0.91.22",
+    "User-Agent": "VansRouter/0.91.33",
     "X-CLIENT-TYPE": "vansrouter",
-    "X-CLIENT-VERSION": "0.91.22",
-    "X-CORE-VERSION": "0.91.22",
+    "X-CLIENT-VERSION": "0.91.33",
+    "X-CORE-VERSION": "0.91.33",
     "X-IS-MULTIROOT": "false",
     "X-PLATFORM": "linux",
     "X-PLATFORM-VERSION": "<ENV>",
@@ -1101,7 +1101,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Linux x64",
     "X-Msh-Device-Name": "<ENV>",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.91.22",
+    "X-Msh-Version": "0.91.33",
     "x-api-key": "<CRED>",
   },
   "nonStream": {
@@ -1112,7 +1112,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Linux x64",
     "X-Msh-Device-Name": "<ENV>",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.91.22",
+    "X-Msh-Version": "0.91.33",
     "x-api-key": "<CRED>",
   },
   "oauth": {
@@ -1124,7 +1124,7 @@ exports[`GOLDEN buildHeaders (default executor providers) > kimi → headers (ap
     "X-Msh-Device-Model": "Linux x64",
     "X-Msh-Device-Name": "<ENV>",
     "X-Msh-Platform": "9router",
-    "X-Msh-Version": "0.91.22",
+    "X-Msh-Version": "0.91.33",
     "x-api-key": "<CRED>",
   },
 }
@@ -1566,6 +1566,25 @@ exports[`GOLDEN buildHeaders (default executor providers) > publicai → headers
 }
 `;
 
+exports[`GOLDEN buildHeaders (default executor providers) > qoder-cn → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+}
+`;
+
 exports[`GOLDEN buildHeaders (default executor providers) > sambanova → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
@@ -1643,6 +1662,25 @@ exports[`GOLDEN buildHeaders (default executor providers) > tencent → headers 
 `;
 
 exports[`GOLDEN buildHeaders (default executor providers) > together → headers (apiKey / oauth) 1`] = `
+{
+  "apiKey": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "nonStream": {
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+  "oauth": {
+    "Accept": "text/event-stream",
+    "Authorization": "Bearer <TOK>",
+    "Content-Type": "application/json",
+  },
+}
+`;
+
+exports[`GOLDEN buildHeaders (default executor providers) > tokenharbor → headers (apiKey / oauth) 1`] = `
 {
   "apiKey": {
     "Accept": "text/event-stream",
@@ -2409,6 +2447,13 @@ exports[`GOLDEN buildUrl (default executor providers) > publicai → url (stream
 }
 `;
 
+exports[`GOLDEN buildUrl (default executor providers) > qoder-cn → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation",
+  "stream": "https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation",
+}
+`;
+
 exports[`GOLDEN buildUrl (default executor providers) > sambanova → url (stream + non-stream) 1`] = `
 {
   "nonStream": "https://api.sambanova.ai/v1/chat/completions",
@@ -2444,10 +2489,17 @@ exports[`GOLDEN buildUrl (default executor providers) > together → url (stream
 }
 `;
 
+exports[`GOLDEN buildUrl (default executor providers) > tokenharbor → url (stream + non-stream) 1`] = `
+{
+  "nonStream": "https://tokenharbor.ai/v1/chat/completions",
+  "stream": "https://tokenharbor.ai/v1/chat/completions",
+}
+`;
+
 exports[`GOLDEN buildUrl (default executor providers) > tokenrouter → url (stream + non-stream) 1`] = `
 {
-  "nonStream": "https://www.tokenrouter.com/v1/chat/completions",
-  "stream": "https://www.tokenrouter.com/v1/chat/completions",
+  "nonStream": "https://api.tokenrouter.com/v1/chat/completions",
+  "stream": "https://api.tokenrouter.com/v1/chat/completions",
 }
 `;
 

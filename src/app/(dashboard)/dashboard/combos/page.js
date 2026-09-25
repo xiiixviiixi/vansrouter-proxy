@@ -1,17 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
-import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModal, CapacityBadges, Select } from "@/shared/components";
+import { Card, Button, CardSkeleton, ModelSelectModal, ConfirmModal, CapacityBadges, Select, ComboFormModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
-
-// Validate combo name: only a-z, A-Z, 0-9, -, _
-const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
 
 export default function CombosPage() {
   const [combos, setCombos] = useState([]);
@@ -20,6 +13,9 @@ export default function CombosPage() {
   const [editingCombo, setEditingCombo] = useState(null);
   const [activeProviders, setActiveProviders] = useState([]);
   const [comboStrategies, setComboStrategies] = useState({});
+  const [presetLoading, setPresetLoading] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);
   const { copied, copy } = useCopyToClipboard();
@@ -29,6 +25,23 @@ export default function CombosPage() {
   useEffect(() => {
     fetchData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Drop stale selection when the combo list changes (delete / refresh).
+  useEffect(() => {
+    const alive = new Set(combos.map((c) => c.id));
+    setSelectedIds((prev) => prev.filter((id) => alive.has(id)));
+  }, [combos]);
+
+  const selectedCombos = combos.filter((c) => selectedIds.includes(c.id));
+  const allSelected = combos.length > 0 && selectedIds.length === combos.length;
+  const someSelected = selectedIds.length > 0;
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const toggleSelectAll = () => setSelectedIds(allSelected ? [] : combos.map((c) => c.id));
+  const clearSelection = () => setSelectedIds([]);
 
   const fetchData = async () => {
     try {
@@ -93,21 +106,141 @@ export default function CombosPage() {
     }
   };
 
+  const handleGeneratePresets = async (source) => {
+    const label = source === "cursor" ? "Cursor Default" : "Claude Default";
+    setPresetLoading(source);
+    try {
+      const previewRes = await fetch(`/api/combos/presets?source=${source}`);
+      const preview = await previewRes.json();
+      if (!previewRes.ok) {
+        alert(preview.error || `Failed to preview ${label}`);
+        return;
+      }
+
+      const total = (preview.items || []).length;
+      const toCreate = preview.toCreate ?? (preview.items || []).filter((i) => !i.exists).length;
+      const toSkip = preview.toSkip ?? (preview.items || []).filter((i) => i.exists).length;
+
+      if (total === 0) {
+        alert(`No ${label} models available to generate.`);
+        return;
+      }
+      if (toCreate === 0) {
+        alert(`All ${total} ${label} combos already exist. Nothing to create.`);
+        return;
+      }
+
+      setConfirmState({
+        title: `Generate ${label}`,
+        message: `Create ${toCreate} combo${toCreate === 1 ? "" : "s"} named like ${source === "cursor" ? "Cursor" : "Claude"} model IDs (seeded with cu/… or cc/…). ${toSkip} already exist and will be skipped. You can edit any combo afterward to add fallbacks.`,
+        confirmText: "Generate",
+        variant: "primary",
+        onConfirm: async () => {
+          setConfirmState((prev) => (prev ? { ...prev, loading: true } : null));
+          try {
+            const res = await fetch("/api/combos/presets", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ source }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              alert(data.error || `Failed to generate ${label}`);
+              setConfirmState((prev) => (prev ? { ...prev, loading: false } : null));
+              return;
+            }
+            await fetchData();
+            setConfirmState(null);
+          } catch (error) {
+            console.log(`Error generating ${label}:`, error);
+            alert(`Failed to generate ${label}`);
+            setConfirmState((prev) => (prev ? { ...prev, loading: false } : null));
+          }
+        },
+      });
+    } catch (error) {
+      console.log(`Error previewing ${label}:`, error);
+      alert(`Failed to preview ${label}`);
+    } finally {
+      setPresetLoading(null);
+    }
+  };
+
+  const pruneStrategiesForNames = (names, base = comboStrategies) => {
+    const updated = { ...base };
+    for (const name of names) delete updated[name];
+    return updated;
+  };
+
+  const persistComboStrategies = async (updated) => {
+    await fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comboStrategies: updated }),
+    });
+    setComboStrategies(updated);
+  };
+
   const handleDelete = async (id) => {
+    const combo = combos.find((c) => c.id === id);
     setConfirmState({
       title: "Delete Combo",
-      message: "Delete this combo?",
+      message: combo ? `Delete combo "${combo.name}"?` : "Delete this combo?",
       onConfirm: async () => {
-        setConfirmState(null);
+        setConfirmState((prev) => (prev ? { ...prev, loading: true } : null));
         try {
           const res = await fetch(`/api/combos/${id}`, { method: "DELETE" });
           if (res.ok) {
-            setCombos(combos.filter(c => c.id !== id));
+            if (combo?.name) await persistComboStrategies(pruneStrategiesForNames([combo.name]));
+            setCombos((prev) => prev.filter((c) => c.id !== id));
+            setSelectedIds((prev) => prev.filter((x) => x !== id));
           }
+          setConfirmState(null);
         } catch (error) {
           console.log("Error deleting combo:", error);
+          setConfirmState((prev) => (prev ? { ...prev, loading: false } : null));
         }
       }
+    });
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedCombos.length === 0) return;
+    const count = selectedCombos.length;
+    setConfirmState({
+      title: "Delete Selected Combos",
+      message: `Delete ${count} selected combo${count === 1 ? "" : "s"}? This cannot be undone.`,
+      confirmText: "Delete",
+      variant: "danger",
+      onConfirm: async () => {
+        setConfirmState((prev) => (prev ? { ...prev, loading: true } : null));
+        setBulkBusy(true);
+        try {
+          const ids = selectedCombos.map((c) => c.id);
+          const results = await Promise.all(
+            ids.map((id) => fetch(`/api/combos/${id}`, { method: "DELETE" }))
+          );
+          // Only combos the server really deleted may disappear locally. A failed
+          // DELETE leaves the row alive in the DB, so dropping it (and its strategy
+          // entry) here would silently diverge from the server.
+          const ok = selectedCombos.filter((_, i) => results[i]?.ok);
+          const okIds = new Set(ok.map((c) => c.id));
+          const failed = ids.length - ok.length;
+          if (ok.length > 0) {
+            await persistComboStrategies(pruneStrategiesForNames(ok.map((c) => c.name)));
+            setCombos((prev) => prev.filter((c) => !okIds.has(c.id)));
+            setSelectedIds((prev) => prev.filter((id) => !okIds.has(id)));
+          }
+          setConfirmState(null);
+          if (failed > 0) alert(`Deleted with ${failed} failure${failed === 1 ? "" : "s"}.`);
+        } catch (error) {
+          console.log("Error bulk deleting combos:", error);
+          alert("Failed to delete selected combos");
+          setConfirmState((prev) => (prev ? { ...prev, loading: false } : null));
+        } finally {
+          setBulkBusy(false);
+        }
+      },
     });
   };
 
@@ -124,15 +257,33 @@ export default function CombosPage() {
         updated[comboName] = next;
       }
 
-      await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comboStrategies: updated }),
-      });
-
-      setComboStrategies(updated);
+      await persistComboStrategies(updated);
     } catch (error) {
       console.log("Error updating combo strategy:", error);
+    }
+  };
+
+  const handleBulkSetStrategy = async (strategy) => {
+    if (selectedCombos.length === 0 || !strategy) return;
+    setBulkBusy(true);
+    try {
+      const updated = { ...comboStrategies };
+      for (const combo of selectedCombos) {
+        if (strategy === "fallback") {
+          delete updated[combo.name];
+        } else {
+          updated[combo.name] = {
+            ...(updated[combo.name] || {}),
+            fallbackStrategy: strategy,
+          };
+        }
+      }
+      await persistComboStrategies(updated);
+    } catch (error) {
+      console.log("Error bulk updating combo strategy:", error);
+      alert("Failed to update strategy for selected combos");
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -183,10 +334,40 @@ export default function CombosPage() {
               </div>
             </div>
           </div>
+          <p className="text-xs text-text-muted mt-3 max-w-2xl">
+            <span className="font-medium text-text-main">Cursor / Claude Default</span> create combos named exactly like those clients&apos; model IDs (e.g. <code className="font-mono">composer-2.5</code>, <code className="font-mono">opus</code>), seeded with the matching <code className="font-mono">cu/…</code> or <code className="font-mono">cc/…</code> route so traffic can hit the router without the prefix.
+            {" "}Note: Cursor IDE often blocks built-in Composer / Grok from Override OpenAI Base URL (&quot;model does not support custom API&quot;); add them via Cursor&apos;s <span className="font-medium text-text-main">Add Custom Model</span> using the combo name, or pick a model Cursor allows through the custom endpoint.
+          </p>
         </div>
-        <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto whitespace-nowrap shrink-0">
-          Create Combo
-        </Button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:shrink-0">
+          <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto whitespace-nowrap">
+            Create Combo
+          </Button>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="edit_note"
+              loading={presetLoading === "cursor"}
+              disabled={!!presetLoading}
+              onClick={() => handleGeneratePresets("cursor")}
+              className="w-full whitespace-nowrap"
+            >
+              Cursor Default
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="smart_toy"
+              loading={presetLoading === "claude"}
+              disabled={!!presetLoading}
+              onClick={() => handleGeneratePresets("claude")}
+              className="w-full whitespace-nowrap"
+            >
+              Claude Default
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* Combos List */}
@@ -204,21 +385,85 @@ export default function CombosPage() {
           </div>
         </Card>
       ) : (
-        <div className="flex flex-col gap-4">
-          {combos.map((combo) => (
-            <ComboCard
-              key={combo.id}
-              combo={combo}
-              getCaps={getCaps}
-              activeProviders={activeProviders}
-              copied={copied}
-              onCopy={copy}
-              onEdit={() => setEditingCombo(combo)}
-              onDelete={() => handleDelete(combo.id)}
-              strategy={comboStrategies[combo.name] || {}}
-              onSetStrategy={(patch) => handleSetComboStrategy(combo.name, patch)}
-            />
-          ))}
+        <div className="flex flex-col gap-3">
+          {/* Selection toolbar */}
+          <div className="flex min-w-0 flex-col gap-2 rounded-lg border border-black/5 bg-black/[0.015] px-3 py-2 dark:border-white/5 dark:bg-white/[0.02] sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-text-muted hover:text-primary select-none">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={(el) => {
+                  if (el) el.indeterminate = someSelected && !allSelected;
+                }}
+                onChange={toggleSelectAll}
+                className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                aria-label="Select all combos"
+              />
+              <span>
+                {someSelected
+                  ? `${selectedIds.length} selected`
+                  : `Select all (${combos.length})`}
+              </span>
+            </label>
+
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {someSelected && (
+                <>
+                  <div className="w-full min-w-[160px] sm:w-[200px]">
+                    <Select
+                      options={STRATEGY_OPTIONS}
+                      value=""
+                      placeholder="Set strategy…"
+                      disabled={bulkBusy}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v) handleBulkSetStrategy(v);
+                      }}
+                      selectClassName="py-1.5 text-xs"
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    icon="delete"
+                    disabled={bulkBusy}
+                    loading={bulkBusy}
+                    onClick={handleBulkDelete}
+                    className="whitespace-nowrap"
+                  >
+                    Delete ({selectedIds.length})
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={clearSelection}
+                    disabled={bulkBusy}
+                  >
+                    Clear
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            {combos.map((combo) => (
+              <ComboCard
+                key={combo.id}
+                combo={combo}
+                getCaps={getCaps}
+                activeProviders={activeProviders}
+                copied={copied}
+                onCopy={copy}
+                onEdit={() => setEditingCombo(combo)}
+                onDelete={() => handleDelete(combo.id)}
+                strategy={comboStrategies[combo.name] || {}}
+                onSetStrategy={(patch) => handleSetComboStrategy(combo.name, patch)}
+                selected={selectedIds.includes(combo.id)}
+                onToggleSelect={() => toggleSelect(combo.id)}
+              />
+            ))}
+          </div>
         </div>
       )}
 
@@ -244,14 +489,16 @@ export default function CombosPage() {
         />
       )}
 
-      {/* Confirm Delete Modal */}
+      {/* Confirm (delete / bulk delete / generate presets) */}
       <ConfirmModal
         isOpen={!!confirmState}
-        onClose={() => setConfirmState(null)}
+        onClose={() => !confirmState?.loading && setConfirmState(null)}
         onConfirm={confirmState?.onConfirm}
         title={confirmState?.title || "Confirm"}
         message={confirmState?.message}
-        variant="danger"
+        confirmText={confirmState?.confirmText || "Confirm"}
+        variant={confirmState?.variant || "danger"}
+        loading={!!confirmState?.loading}
       />
     </div>
   );
@@ -263,16 +510,26 @@ const STRATEGY_OPTIONS = [
   { value: "fusion", label: "Fusion — panel + judge" },
 ];
 
-function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy }) {
+function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
 
   return (
-    <Card padding="sm" className="group">
+    <Card padding="sm" className={`group ${selected ? "ring-1 ring-primary/40 bg-primary/[0.03]" : ""}`}>
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+          <label className="flex shrink-0 items-center pt-1 sm:pt-0 cursor-pointer" title="Select combo">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggleSelect}
+              onClick={(e) => e.stopPropagation()}
+              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              aria-label={`Select ${combo.name}`}
+            />
+          </label>
           <div className="size-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-primary text-[18px]">layers</span>
           </div>
@@ -293,6 +550,17 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
                 <span className="text-[10px] text-text-muted">+{combo.models.length - 3} more</span>
               )}
             </div>
+            {combo.models.length > 0 && combo.models.every((model) => getCaps?.(model)?.vision === false) && (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="mt-1 inline-flex items-center gap-1 text-[11px] text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+                title="Edit combo to add a vision-capable model"
+              >
+                <span className="material-symbols-outlined text-[14px]">visibility_off</span>
+                Cannot see images — edit combo
+              </button>
+            )}
             {/* Fusion: judge picker (Auto = first model) */}
             {isFusion && (
               <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
@@ -375,309 +643,5 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
         />
       )}
     </Card>
-  );
-}
-
-function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMoveDown, onRemove }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({ id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    // no transition — prevents the CSS settle animation fighting React's re-render on drop
-    opacity: isDragging ? 0.4 : 1,
-    zIndex: isDragging ? 999 : undefined,
-  };
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(model);
-  const commit = () => {
-    const trimmed = draft.trim();
-    if (trimmed && trimmed !== model) onEdit(trimmed);
-    else setDraft(model);
-    setEditing(false);
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter") commit();
-    if (e.key === "Escape") { setDraft(model); setEditing(false); }
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`group flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 bg-black/[0.02] hover:bg-black/[0.04] dark:bg-white/[0.02] dark:hover:bg-white/[0.04] transition-colors ${isDragging ? "shadow-md ring-1 ring-primary/30" : ""}`}
-    >
-      {/* Drag handle */}
-      <button
-        {...attributes}
-        {...listeners}
-        type="button"
-        className="cursor-grab touch-none p-0.5 rounded text-text-muted hover:text-primary active:cursor-grabbing shrink-0"
-        title="Drag to reorder"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <circle cx="9" cy="4" r="2"/><circle cx="15" cy="4" r="2"/>
-          <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
-          <circle cx="9" cy="20" r="2"/><circle cx="15" cy="20" r="2"/>
-        </svg>
-      </button>
-
-      {/* Index badge */}
-      <span className="text-[10px] font-medium text-text-muted w-3 text-center shrink-0">{index + 1}</span>
-
-      {/* Inline editable model value */}
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={handleKeyDown}
-          className="min-w-0 flex-1 rounded border border-primary/40 bg-white px-1.5 py-0.5 font-mono text-xs text-text-main outline-none dark:bg-black/20"
-        />
-      ) : (
-        <div
-          className="min-w-0 flex-1 cursor-text truncate rounded px-1.5 py-0.5 font-mono text-xs text-text-main hover:bg-black/5 dark:hover:bg-white/5"
-          onClick={() => setEditing(true)}
-          title="Click to edit"
-        >
-          {model}
-        </div>
-      )}
-
-      {/* Priority arrows */}
-      <div className="flex shrink-0 items-center gap-0.5">
-        <button
-          onClick={onMoveUp}
-          disabled={isFirst}
-          className={`p-0.5 rounded ${isFirst ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
-          title="Move up"
-        >
-          <span className="material-symbols-outlined text-[12px]">arrow_upward</span>
-        </button>
-        <button
-          onClick={onMoveDown}
-          disabled={isLast}
-          className={`p-0.5 rounded ${isLast ? "text-text-muted/20 cursor-not-allowed" : "text-text-muted hover:text-primary hover:bg-black/5 dark:hover:bg-white/5"}`}
-          title="Move down"
-        >
-          <span className="material-symbols-outlined text-[12px]">arrow_downward</span>
-        </button>
-      </div>
-
-      {/* Remove */}
-      <button
-        onClick={onRemove}
-        className="p-0.5 hover:bg-red-500/10 rounded text-text-muted hover:text-red-500 transition-all"
-        title="Remove"
-      >
-        <span className="material-symbols-outlined text-[12px]">close</span>
-      </button>
-    </div>
-  );
-}
-
-function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindFilter = null }) {
-  // Initialize state with combo values - key prop on parent handles reset on remount
-  const [name, setName] = useState(combo?.name || "");
-  const [models, setModels] = useState(combo?.models || []);
-  const [showModelSelect, setShowModelSelect] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [nameError, setNameError] = useState("");
-  const [modelAliases, setModelAliases] = useState({});
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  );
-
-  // Use stable index-based IDs so duplicates and similar names are handled correctly
-  const modelItems = models.map((model, i) => ({ uid: `item-${i}`, model }));
-
-  const handleDragEnd = (event) => {
-    const { active, over } = event;
-    if (over && active.id !== over.id) {
-      const oldIndex = modelItems.findIndex((m) => m.uid === active.id);
-      const newIndex = modelItems.findIndex((m) => m.uid === over.id);
-      if (oldIndex !== -1 && newIndex !== -1) {
-        setModels((prev) => arrayMove(prev, oldIndex, newIndex));
-      }
-    }
-  };
-
-  const fetchModalData = async () => {
-    try {
-      const aliasesRes = await fetch("/api/models/alias");
-      if (!aliasesRes.ok) return;
-      const aliasesData = await aliasesRes.json();
-      setModelAliases(aliasesData.aliases || {});
-    } catch (error) {
-      console.error("Error fetching modal data:", error);
-    }
-  };
-
-  useEffect(() => {
-    if (isOpen)
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on open; fetchModalData is declared below the JSX section.
-      fetchModalData();
-  }, [isOpen]);
-
-  const validateName = (value) => {
-    if (!value.trim()) {
-      setNameError("Name is required");
-      return false;
-    }
-    if (!VALID_NAME_REGEX.test(value)) {
-      setNameError("Only letters, numbers, -, _ and . allowed");
-      return false;
-    }
-    setNameError("");
-    return true;
-  };
-
-  const handleNameChange = (e) => {
-    const value = e.target.value;
-    setName(value);
-    if (value) validateName(value);
-    else setNameError("");
-  };
-
-  const handleAddModel = (model) => {
-    if (!models.includes(model.value)) {
-      setModels([...models, model.value]);
-    }
-  };
-
-  const handleDeselectModel = (model) => {
-    setModels(models.filter((m) => m !== model.value));
-  };
-
-  const handleRemoveModel = (index) => {
-    setModels(models.filter((_, i) => i !== index));
-  };
-
-  const handleMoveUp = (index) => {
-    if (index === 0) return;
-    const newModels = [...models];
-    [newModels[index - 1], newModels[index]] = [newModels[index], newModels[index - 1]];
-    setModels(newModels);
-  };
-
-  const handleMoveDown = (index) => {
-    if (index === models.length - 1) return;
-    const newModels = [...models];
-    [newModels[index], newModels[index + 1]] = [newModels[index + 1], newModels[index]];
-    setModels(newModels);
-  };
-
-  const handleSave = async () => {
-    if (!validateName(name)) return;
-    setSaving(true);
-    await onSave({ name: name.trim(), models });
-    setSaving(false);
-  };
-
-  const isEdit = !!combo;
-
-  return (
-    <>
-      <Modal
-        isOpen={isOpen}
-        onClose={onClose}
-        title={isEdit ? "Edit Combo" : "Create Combo"}
-      >
-        <div className="flex flex-col gap-3">
-          {/* Name */}
-          <div>
-            <Input
-              label="Combo Name"
-              value={name}
-              onChange={handleNameChange}
-              placeholder="my-combo"
-              error={nameError}
-            />
-            <p className="text-[10px] text-text-muted mt-0.5">
-              Only letters, numbers, -, _ and . allowed
-            </p>
-          </div>
-
-          {/* Models */}
-          <div>
-            <label className="text-sm font-medium mb-1.5 block">Models</label>
-
-            {models.length === 0 ? (
-              <div className="text-center py-4 border border-dashed border-black/10 dark:border-white/10 rounded-lg bg-black/[0.01] dark:bg-white/[0.01]">
-                <span className="material-symbols-outlined text-text-muted text-xl mb-1">layers</span>
-                <p className="text-xs text-text-muted">No models added yet</p>
-              </div>
-            ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd} modifiers={[restrictToVerticalAxis, restrictToParentElement]}>
-              <SortableContext items={modelItems.map((m) => m.uid)} strategy={verticalListSortingStrategy}>
-                <div className="flex max-h-[55vh] min-w-0 flex-col gap-1 overflow-y-auto sm:max-h-[350px]">
-                  {modelItems.map(({ uid, model }, index) => (
-                    <ModelItem
-                      key={uid}
-                      id={uid}
-                      index={index}
-                      model={model}
-                      isFirst={index === 0}
-                      isLast={index === modelItems.length - 1}
-                      onEdit={(newVal) => {
-                        const updated = [...models];
-                        updated[index] = newVal;
-                        setModels(updated);
-                      }}
-                      onMoveUp={() => handleMoveUp(index)}
-                      onMoveDown={() => handleMoveDown(index)}
-                      onRemove={() => handleRemoveModel(index)}
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
-            )}
-
-            {/* Add Model button */}
-            <button
-              onClick={() => setShowModelSelect(true)}
-              className="w-full mt-2 py-2 border border-dashed border-black/10 dark:border-white/10 rounded-lg text-xs text-primary font-medium hover:text-primary hover:border-primary/50 transition-colors flex items-center justify-center gap-1"
-            >
-              <span className="material-symbols-outlined text-[16px]">add</span>
-              Add Model
-            </button>
-          </div>
-
-          {/* Actions */}
-          <div className="flex flex-col gap-2 pt-1 sm:flex-row">
-            <Button onClick={onClose} variant="ghost" fullWidth size="sm">
-              Cancel
-            </Button>
-            <Button
-              onClick={handleSave}
-              fullWidth
-              size="sm"
-              disabled={!name.trim() || !!nameError || saving}
-            >
-              {saving ? "Saving..." : isEdit ? "Save" : "Create"}
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Model Select Modal */}
-      {showModelSelect && (
-        <ModelSelectModal
-          isOpen={showModelSelect}
-          onClose={() => setShowModelSelect(false)}
-          onSelect={handleAddModel}
-          onDeselect={handleDeselectModel}
-          activeProviders={activeProviders}
-          modelAliases={modelAliases}
-          title="Add Model to Combo"
-          kindFilter={kindFilter}
-          addedModelValues={models}
-          closeOnSelect={false}
-        />
-      )}
-    </>
   );
 }

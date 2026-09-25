@@ -5,8 +5,18 @@
  * Based on the JavaScript implementation from Cursor IDE.
  */
 
-import crypto from "crypto";
-import { v5 as uuidv5 } from "uuid";
+import crypto from "node:crypto";
+
+const UUID_DNS = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+
+function uuidv5(name, namespace) {
+  const namespaceBytes = Buffer.from(namespace.replaceAll("-", ""), "hex");
+  const hash = crypto.createHash("sha1").update(namespaceBytes).update(name, "utf8").digest();
+  hash[6] = (hash[6] & 0x0f) | 0x50;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const hex = hash.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 /**
  * Generate SHA-256 hash like generateHashed64Hex
@@ -24,7 +34,7 @@ export function generateHashed64Hex(input, salt = "") {
  * @returns {string} - UUID string
  */
 export function generateSessionId(authToken) {
-  return uuidv5(authToken, uuidv5.DNS);
+  return uuidv5(authToken, UUID_DNS);
 }
 
 /**
@@ -62,24 +72,7 @@ export function generateCursorChecksum(machineId) {
   }
 
   // URL-safe base64 encode (without padding)
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-  let encoded = "";
-
-  for (let i = 0; i < byteArray.length; i += 3) {
-    const a = byteArray[i];
-    const b = i + 1 < byteArray.length ? byteArray[i + 1] : 0;
-    const c = i + 2 < byteArray.length ? byteArray[i + 2] : 0;
-
-    encoded += alphabet[a >> 2];
-    encoded += alphabet[((a & 3) << 4) | (b >> 4)];
-
-    if (i + 1 < byteArray.length) {
-      encoded += alphabet[((b & 15) << 2) | (c >> 6)];
-    }
-    if (i + 2 < byteArray.length) {
-      encoded += alphabet[c & 63];
-    }
-  }
+  const encoded = Buffer.from(byteArray).toString("base64url");
 
   return `${encoded}${machineId}`;
 }
@@ -128,8 +121,8 @@ export function buildCursorHeaders(accessToken, machineId = null, ghostMode = tr
     "x-amzn-trace-id": `Root=${crypto.randomUUID()}`,
     "x-client-key": clientKey,
     "x-cursor-checksum": checksum,
-    "x-cursor-client-version": "3.12.17",
-    "x-cursor-client-commit": "0fb762053c34788bb7760d5673f8a6d4c8589d50",
+    "x-cursor-client-version": "3.13.25",
+    "x-cursor-client-commit": "d5c0e77a0214208f36b56d42e8e787de88d02ea4",
     "x-cursor-client-type": "ide",
     "x-cursor-client-os": os,
     "x-cursor-client-arch": arch,

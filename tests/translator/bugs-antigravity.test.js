@@ -204,7 +204,8 @@ describe("Antigravity executor", () => {
     expect(req.contents).toBeDefined();
     expect(req.systemInstruction).toBeDefined();
     expect(req.generationConfig).toBeDefined();
-    expect(req.sessionId).toBe("sess-123");
+    // The client session id survives, normalized to Antigravity's numeric int64 format.
+    expect(req.sessionId).toMatch(/^-?\d+$/);
 
     // Unexpected fields stripped
     expect(req.max_tokens).toBeUndefined();
@@ -245,7 +246,8 @@ describe("Antigravity executor", () => {
     expect(out.request.contents).toEqual([{ role: "user", parts: [{ text: "hello" }] }]);
     expect(out.request.systemInstruction).toEqual({ role: "user", parts: [{ text: "You are helpful" }] });
     expect(out.request.generationConfig.maxOutputTokens).toBe(32);
-    expect(out.request.sessionId).toBe("sess-123");
+    // Normalized to Antigravity's numeric int64 format, not echoed verbatim.
+    expect(out.request.sessionId).toMatch(/^-?\d+$/);
   });
 
   // Issue #6: v1internal rejects content entries with empty parts[] (400 on all models)
@@ -315,5 +317,38 @@ describe("Antigravity executor", () => {
         data: "JVBERi0xLjEKMSAwIG9iajw8L1R5cGUvQ2F0YWxvZy9QYWdlcyAyIDAgUj4+ZW5kb2Jq",
       },
     });
+  });
+
+  // Google buckets a chat request that carries requestType as exhausted (429
+  // RESOURCE_EXHAUSTED without detail) even with quota left, so the agent path
+  // must not send one.
+  it("omits requestType for Gemini and Claude Antigravity models", () => {
+    for (const model of ["gemini-3.5-flash-low", "claude-opus-4-6-thinking"]) {
+      const out = translateRequest(FORMATS.OPENAI, FORMATS.ANTIGRAVITY, model, {
+        messages: [{ role: "user", content: "hi" }],
+      }, true, { projectId: "p", connectionId: "c" });
+
+      expect(out.requestType, `model=${model}`).toBeUndefined();
+    }
+  });
+
+  it("drops requestType leaked from a translated envelope", () => {
+    const out = new AntigravityExecutor().transformRequest("gemini-3.5-flash-low", {
+      project: "project-1",
+      model: "gemini-3.5-flash-low",
+      userAgent: "antigravity",
+      requestType: "agent",
+      request: { contents: [{ role: "user", parts: [{ text: "hi" }] }], sessionId: "sess-1" },
+    }, true, { projectId: "project-1", connectionId: "conn-1" });
+
+    expect(out.requestType).toBeUndefined();
+  });
+
+  it("keeps requestType image_gen for image models", () => {
+    const out = new AntigravityExecutor().transformRequest("gemini-3.1-flash-image", {
+      request: { contents: [{ role: "user", parts: [{ text: "a cat" }] }] },
+    }, true, { projectId: "p", connectionId: "c" });
+
+    expect(out.requestType).toBe("image_gen");
   });
 });

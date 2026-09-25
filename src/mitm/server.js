@@ -12,6 +12,7 @@ const { DATA_DIR, MITM_DIR } = require("./paths");
 const { getCertForDomain } = require("./cert/generate");
 const { getMitmAlias } = require("./dbReader");
 const { applyAntigravityIdeVersionOverride } = require("./antigravityIdeVersion");
+const { scrubSchemaKeywords } = require("./scrubSchemaKeywords.cjs");
 const LOCAL_PORT = 443;
 const IS_WIN = process.platform === "win32";
 const ENABLE_FILE_LOG = IS_DEV;
@@ -95,10 +96,10 @@ function collectBodyRaw(req) {
 function extractModel(url, body) {
   const urlMatch = url.match(/\/models\/([^/:]+)/);
   if (urlMatch) return urlMatch[1];
-  
+
   // Skip parsing if body is binary (AWS EventStream, Protocol Buffers, etc.)
   if (isBinaryData(body)) return null;
-  
+
   try {
     const parsed = JSON.parse(body.toString());
     if (parsed.conversationState) {
@@ -165,7 +166,11 @@ async function passthrough(req, res, bodyBuffer, onResponse) {
   const versionOverride = tool === "antigravity"
     ? applyAntigravityIdeVersionOverride(bodyBuffer, req.headers)
     : { bodyBuffer, headers: req.headers };
-  const bodyForForwarding = versionOverride.bodyBuffer;
+  // Antigravity passthrough bodies skip the translator, so the same unsupported schema
+  // keywords (e.g. "optional") must be scrubbed here or Google 400s the request.
+  const bodyForForwarding = tool === "antigravity"
+    ? scrubSchemaKeywords(versionOverride.bodyBuffer)
+    : versionOverride.bodyBuffer;
   const headersForForwarding = { ...versionOverride.headers, host: targetHost };
   if (bodyForForwarding !== bodyBuffer) {
     headersForForwarding["content-length"] = String(bodyForForwarding.length);

@@ -5,6 +5,9 @@
 const SINGLE_REPEAT_THRESHOLD = 3; // same tool+args appearing >= this many times
 const SEQUENCE_REPEAT_THRESHOLD = 2; // same sequence of N tool calls appearing >= this many times
 const MIN_SEQUENCE_LENGTH = 2; // minimum sequence length to detect
+const MAX_SEQUENCE_LENGTH = 6; // maximum sequence length to detect (agent loops are tight cycles)
+const RECENT_TOOL_WINDOW = 40; // only inspect the most recent tool calls (avoids O(N^4) on large sessions)
+const RECENT_TEXT_WINDOW = 20; // only inspect the most recent assistant messages for text loops
 
 // Text-loop detection thresholds (symptom: model repeats planning/intent text
 // without ever making a tool call — e.g. "I need to read the key files..." 6×).
@@ -12,14 +15,25 @@ const TEXT_MESSAGE_REPEAT_THRESHOLD = 3; // same normalized assistant message >=
 const TEXT_SENTENCE_REPEAT_THRESHOLD = 3; // same sentence across all assistant msgs >= this many times
 const MIN_TEXT_LENGTH = 12; // ignore tiny fragments (< this many chars) to avoid false positives
 
+function sortObjectKeys(val) {
+  if (val === null || typeof val !== "object") return val;
+  if (Array.isArray(val)) return val.map(sortObjectKeys);
+  const sorted = {};
+  for (const k of Object.keys(val).sort()) {
+    sorted[k] = sortObjectKeys(val[k]);
+  }
+  return sorted;
+}
+
 /**
  * Normalize tool call arguments for stable hashing:
- * Sort object keys so {b:1,a:2} and {a:2,b:1} produce the same hash.
+ * Sort object keys recursively so {b:1,a:2} and {a:2,b:1} produce the same hash,
+ * preserving nested object properties.
  */
 function normalizeArgs(argsStr) {
   try {
     const obj = JSON.parse(argsStr);
-    return JSON.stringify(obj, Object.keys(obj).sort());
+    return JSON.stringify(sortObjectKeys(obj));
   } catch {
     return argsStr || "";
   }
@@ -32,15 +46,17 @@ function toolCallHash(tc) {
 }
 
 /**
- * Extract all tool_call hashes from conversation history in order.
- * Each assistant message with tool_calls contributes its calls in order.
+ * Extract all tool_call hashes from recent conversation history in order.
+ * Scans from newest to oldest up to RECENT_TOOL_WINDOW calls to avoid O(N) serialization on large histories.
  */
-function extractToolCallSequence(messages) {
+function extractToolCallSequence(messages, maxCalls = RECENT_TOOL_WINDOW) {
   const seq = [];
-  for (const msg of messages) {
+  for (let i = messages.length - 1; i >= 0 && seq.length < maxCalls; i--) {
+    const msg = messages[i];
     if (msg?.role === "assistant" && Array.isArray(msg.tool_calls)) {
-      for (const tc of msg.tool_calls) {
-        seq.push(toolCallHash(tc));
+      for (let j = msg.tool_calls.length - 1; j >= 0; j--) {
+        seq.unshift(toolCallHash(msg.tool_calls[j]));
+        if (seq.length >= maxCalls) break;
       }
     }
   }
@@ -61,12 +77,13 @@ function detectSingleRepeat(seq) {
 
 /**
  * Detect a sequence of N tool calls that repeats >= SEQUENCE_REPEAT_THRESHOLD times.
- * Uses sliding window to find N-gram repeats.
+ * Uses sliding window to find N-gram repeats. Capped at MAX_SEQUENCE_LENGTH to avoid polynomial explosion.
  */
 function detectSequenceRepeat(seq) {
   const n = seq.length;
+  const maxLen = Math.min(MAX_SEQUENCE_LENGTH, Math.floor(n / 2));
   // Try sequence lengths from largest to smallest (greedy)
-  for (let len = Math.floor(n / 2); len >= MIN_SEQUENCE_LENGTH; len--) {
+  for (let len = maxLen; len >= MIN_SEQUENCE_LENGTH; len--) {
     for (let start = 0; start <= n - len * 2; start++) {
       const pattern = seq.slice(start, start + len).join("|");
       let count = 0;
@@ -125,14 +142,16 @@ function splitSentences(text) {
 }
 
 /**
- * Extract all assistant message texts in conversation order.
+ * Extract assistant message texts from recent conversation history in order.
+ * Limited to RECENT_TEXT_WINDOW to avoid scanning and splitting thousands of historical sentences.
  */
-function extractAssistantTexts(messages) {
+function extractAssistantTexts(messages, maxCount = RECENT_TEXT_WINDOW) {
   const texts = [];
-  for (const msg of messages) {
+  for (let i = messages.length - 1; i >= 0 && texts.length < maxCount; i--) {
+    const msg = messages[i];
     if (msg?.role === "assistant") {
       const t = messageText(msg);
-      if (t.length >= MIN_TEXT_LENGTH) texts.push(t);
+      if (t.length >= MIN_TEXT_LENGTH) texts.unshift(t);
     }
   }
   return texts;
@@ -170,7 +189,9 @@ function detectTextRepeat(messages) {
   // 2. Sentence-level repeat across messages
   const sentenceCounts = new Map();
   for (const t of texts) {
-    for (const s of splitSentences(t)) {
+    if (t.length > 4096) continue; // Skip sentence splitting on massive code/diff dumps
+    const uniqueSentences = new Set(splitSentences(t));
+    for (const s of uniqueSentences) {
       const count = (sentenceCounts.get(s) || 0) + 1;
       sentenceCounts.set(s, count);
       if (count >= TEXT_SENTENCE_REPEAT_THRESHOLD) {

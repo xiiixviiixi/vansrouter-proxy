@@ -32,11 +32,11 @@ function isPm2() {
 }
 
 function isSystemd() {
-  // systemd sets INVOCATION_ID for every service it starts.
-  if (process.env.INVOCATION_ID) return true;
-  // /run/systemd/system exists on systemd-managed hosts.
-  if (existsSync("/run/systemd/system")) return true;
-  return false;
+  // systemd sets INVOCATION_ID for every service it supervises.
+  // We do NOT check /run/systemd/system: that directory exists for every process
+  // on a systemd host, which falsely identifies interactive terminal runs as systemd.
+  // Nor do we check JOURNAL_STREAM which leaks into spawned child shells.
+  return Boolean(process.env.INVOCATION_ID);
 }
 
 function isScreen() {

@@ -63,30 +63,21 @@ export function detectFormat(body) {
   if (body.messages && Array.isArray(body.messages)) {
     const firstMsg = body.messages[0];
     
-    // If content is array, check every block because multimodal requests may start
-    // with an image rather than text.
+    // If content is array, check blocks with early exit (avoids O(N) allocation on huge sessions).
     if (firstMsg?.content && Array.isArray(firstMsg.content) && !body.model?.includes("/")) {
-      const contentBlocks = body.messages.flatMap((message) =>
-        Array.isArray(message?.content) ? message.content : []
-      );
-
       if (body.system || body.anthropic_version) {
         return "claude";
       }
 
-      const hasClaudeImage = contentBlocks.some((content) =>
-        content.type === "image" && content.source?.type === "base64"
-      );
-      const hasOpenAIImage = contentBlocks.some((content) =>
-        content.type === "image_url" && content.image_url?.url
-      );
-      if (hasClaudeImage) return "claude";
-      if (hasOpenAIImage) return "openai";
-
-      const hasClaudeTool = contentBlocks.some((content) =>
-        content.type === "tool_use" || content.type === "tool_result"
-      );
-      if (hasClaudeTool) return "claude";
+      for (const message of body.messages) {
+        if (!Array.isArray(message?.content)) continue;
+        for (const content of message.content) {
+          if (!content || typeof content !== "object") continue;
+          if (content.type === "image" && content.source?.type === "base64") return "claude";
+          if (content.type === "image_url" && content.image_url?.url) return "openai";
+          if (content.type === "tool_use" || content.type === "tool_result") return "claude";
+        }
+      }
     }
     
     // If content is string, it's likely OpenAI (Claude also supports this)

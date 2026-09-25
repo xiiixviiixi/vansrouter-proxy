@@ -20,7 +20,11 @@ import {
 import { parseDataUri } from "../concerns/image.js";
 import { DEFAULT_IMAGE_MIME } from "../schema/index.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
-import { canonicalizeKiroConversation, normalizeKiroToolSpecs } from "../concerns/kiroConversation.js";
+import {
+  canonicalizeKiroConversation,
+  normalizeKiroToolSpecs,
+  kiroEmptyUserContent,
+} from "../concerns/kiroConversation.js";
 
 /** Render a single tool call as a readable text line. */
 function toolCallToText(name, input) {
@@ -128,7 +132,8 @@ function convertMessages(messages, tools, model) {
 
   const flushPending = () => {
     if (currentRole === "user") {
-      const content = pendingUserContent.join("\n\n").trim() || "continue";
+      const content = pendingUserContent.join("\n\n").trim()
+        || kiroEmptyUserContent(pendingToolResults.length > 0);
       const userMsg = {
         userInputMessage: {
           content: content,
@@ -574,6 +579,14 @@ export function openaiToKiroRequest(model, body, stream, credentials) {
     value: upstreamModel,
     enumerable: false
   });
+
+  // Kiro tool specs get sanitized names (`mcp.a.b` → `mcp_a_b`); keep the reverse
+  // map so tool calls come back under the client's own names.
+  const restoredToolNames = new Map();
+  for (const [original, sanitized] of nameMap) {
+    if (original !== sanitized) restoredToolNames.set(sanitized, original);
+  }
+  if (restoredToolNames.size) payload._toolNameMap = restoredToolNames;
 
   return payload;
 }

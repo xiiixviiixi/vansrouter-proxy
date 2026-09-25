@@ -28,14 +28,14 @@ import { BaseExecutor } from "./base.js";
 import { PROVIDERS } from "../config/providers.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { SSE_DONE } from "../utils/sseConstants.js";
-import { FETCH_CONNECT_TIMEOUT_MS } from "../config/runtimeConfig.js";
+import { FETCH_CONNECT_TIMEOUT_MS, HTTP_STATUS } from "../config/runtimeConfig.js";
 import {
   QODER_CHAT_URL_ENCODED,
   QODER_CHAT_BASE_ALT,
   QODER_CHAT_SIG_PATH,
-  QODER_MODEL_MAP,
 } from "../shared/qoder/constants.js";
 import { getQoderModelConfig, resolveQoderModels, isQoderPat, resolveQoderCredentials } from "../services/qoderModels.js";
+import { resolveQoderContextTier, applyQoderContextTier, QODER_CONTEXT_TIER_ENV } from "../shared/qoder/contextTier.js";
 
 /**
  * Hoist role:"system" messages out of the messages array (Qoder rejects
@@ -164,7 +164,21 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
   const sessionId = stableHash("qoder-session", psd.userId, qoderKey);
   const recordId = stableChatRecordId(qoderKey, messages, tools, maxTokens);
 
-  return {
+  // Context-window tier (200K/400K/1M): the IDE picks one from model_config.context_config;
+  // qodercli-style requests default to the smallest. Escalate when the prompt no longer fits.
+  const tierChoice = resolveQoderContextTier(
+    modelConfig,
+    { system: systemText, messages, tools },
+    { preference: process.env[QODER_CONTEXT_TIER_ENV] },
+  );
+  if (tierChoice) {
+    log?.info?.(
+      "QODER",
+      `context tier ${tierChoice.tier.name} (${tierChoice.tier.tokenCount} tokens, ${tierChoice.reason}) for ~${tierChoice.estimatedTokens} prompt tokens`,
+    );
+  }
+
+  const built = {
     qoderKey,
     payload: {
       request_id: randomUUID(),
@@ -212,6 +226,8 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
     },
     modelConfig,
   };
+  if (tierChoice) applyQoderContextTier(built.payload, tierChoice.tier);
+  return built;
 }
 
 /**
@@ -221,15 +237,22 @@ async function buildQoderRequestBody({ model, body, credentials, log, proxyOptio
  * Each upstream line looks like:
  *   data: {"statusCodeValue":200,"body":"{\"choices\":[{\"delta\":{...}}]}"}
  * The inner body is an OpenAI streaming chunk (or "[DONE]"). We unwrap it
- * and re-emit as `data: <inner>\n\n`. Errors become `data: [DONE]\n\n` plus
- * a synthetic OpenAI error chunk.
+ * and re-emit as `data: <inner>\n\n`. A first-frame error becomes a real HTTP
+ * error response; errors after streaming starts emit a synthetic error chunk
+ * plus `data: [DONE]`.
  */
 function isBillingBlock(inner) {
   if (typeof inner !== "string") return false;
-  return /["']?code["']?\s*:\s*["']?(?:112|10605)["']?/i.test(inner)
+  return /["']?code["']?\s*:\s*["']?(?:110|112|10605)(?!\d)["']?/i.test(inner)
     || /pricingUrl/i.test(inner);
 }
 
+/**
+ * Peek the first data line so an upstream error can still become a real HTTP
+ * status. Returns { isError, isBilling, statusVal, message, consumed } —
+ * `consumed` holds every byte read so the caller can re-process it and the
+ * peeked frame is not dropped.
+ */
 async function peekFirstQoderFrame(reader, decoder) {
   let consumed = "";
   let scanOffset = 0;
@@ -248,10 +271,13 @@ async function peekFirstQoderFrame(reader, decoder) {
 
     let envelope;
     try { envelope = JSON.parse(data); } catch { return { consumed }; }
-    const statusVal = typeof envelope.statusCodeValue === "number" ? envelope.statusCodeValue : 200;
-    const inner = typeof envelope.body === "string" ? envelope.body : "";
-    if (statusVal !== 200 && isBillingBlock(inner)) {
-      return { isBilling: true, statusVal, message: inner || `qoder billing block (${statusVal})` };
+    // statusCodeValue is documented numeric, but accept numeric strings too.
+    const statusVal = Number(envelope.statusCodeValue) || 200;
+    const inner = typeof envelope.body === "string"
+      ? envelope.body
+      : envelope.body != null ? JSON.stringify(envelope.body) : "";
+    if (statusVal !== 200) {
+      return { isError: true, isBilling: isBillingBlock(inner), statusVal, message: inner || `upstream status ${statusVal}` };
     }
     return { consumed };
   }
@@ -263,11 +289,18 @@ async function wrapQoderSSE(response, model) {
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   const peek = await peekFirstQoderFrame(reader, decoder);
-  if (peek.isBilling) {
+  if (peek.isError) {
     await reader.cancel().catch(() => {});
+    // Billing blocks keep the 403 mapping so chatCore locks the model and the
+    // combo falls back; other errors surface their own 4xx/5xx when sane.
+    const status = peek.isBilling
+      ? HTTP_STATUS.FORBIDDEN
+      : Number.isInteger(peek.statusVal) && peek.statusVal >= HTTP_STATUS.BAD_REQUEST && peek.statusVal <= 599
+        ? peek.statusVal
+        : HTTP_STATUS.BAD_GATEWAY;
     return new Response(
       JSON.stringify({ error: { message: peek.message, code: peek.statusVal } }),
-      { status: 403, headers: { "Content-Type": "application/json" } },
+      { status, headers: { "Content-Type": "application/json" } },
     );
   }
 
@@ -290,9 +323,30 @@ async function wrapQoderSSE(response, model) {
 
     let envelope;
     try { envelope = JSON.parse(data); } catch { return; }
-    const statusVal = typeof envelope.statusCodeValue === "number" ? envelope.statusCodeValue : 200;
-    const inner = typeof envelope.body === "string" ? envelope.body : "";
+    const statusVal = Number(envelope.statusCodeValue) || 200;
+    const inner = typeof envelope.body === "string"
+      ? envelope.body
+      : envelope.body != null ? JSON.stringify(envelope.body) : "";
     if (statusVal !== 200) {
+      if (isBillingBlock(inner)) {
+        // Quota/billing envelopes can land after the first frame (the peek
+        // only covers that one). Emit a structured error chunk instead of
+        // fake assistant text — parseSSEToOpenAIResponse reads chunk.error and
+        // turns it into a non-200 result, so the model gets locked and the
+        // combo falls back instead of recording "[qoder error ...]" as content.
+        const errObj = JSON.stringify({
+          error: {
+            message: inner || `qoder billing block (${statusVal})`,
+            code: "qoder_billing_block",
+            status: HTTP_STATUS.FORBIDDEN,
+            type: "quota_error",
+          },
+        });
+        controller.enqueue(encoder.encode(`data: ${errObj}\n\n`));
+        controller.enqueue(encoder.encode(SSE_DONE));
+        doneEmitted = true;
+        return;
+      }
       const msg = inner || `upstream status ${statusVal}`;
       const errChunk = JSON.stringify({
         id: `qoder-error-${Date.now()}`,
@@ -489,8 +543,15 @@ export class QoderExecutor extends BaseExecutor {
       response = await proxyAwareFetch(
         url,
         { method: "POST", headers, body: encodedBodyBuf, signal: mergedSignal },
-        proxyOptions,
+        // A failed proxy request may already have reached Qoder, and reusing
+        // the same COSY signature on a direct retry is rejected as a replayed
+        // request id. Fail hard instead of silently retrying.
+        { ...proxyOptions, strictProxy: true },
       );
+    } catch (err) {
+      // strictProxy wraps transport errors — keep cancellation visible as-is.
+      if (mergedSignal.aborted) throw mergedSignal.reason;
+      throw err;
     } finally {
       clearTimeout(connectTimer);
     }

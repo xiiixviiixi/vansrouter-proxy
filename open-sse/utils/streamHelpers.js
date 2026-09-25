@@ -1,4 +1,8 @@
 import { FORMATS } from "../translator/formats.js";
+import { buildErrorBody } from "./error.js";
+import { SSE_DONE } from "./sseConstants.js";
+
+const sharedEncoder = new TextEncoder();
 
 // Parse SSE data line
 export function parseSSELine(line, format = null) {
@@ -63,7 +67,7 @@ export function hasValuableContent(chunk, format) {
     const hasText = chunk.delta?.text && chunk.delta.text !== "";
     const hasThinking = chunk.delta?.thinking && chunk.delta.thinking !== "";
     const hasInputJson = chunk.delta?.partial_json && chunk.delta.partial_json !== "";
-    
+
     if (isContentBlockDelta && !hasText && !hasThinking && !hasInputJson) {
       return false;
     }
@@ -76,8 +80,8 @@ export function hasValuableContent(chunk, format) {
 // Fix invalid id (generic or too short)
 export function fixInvalidId(parsed) {
   if (parsed.id && (parsed.id === "chat" || parsed.id === "completion" || parsed.id.length < 8)) {
-    const fallbackId = parsed.extend_fields?.requestId || 
-                      parsed.extend_fields?.traceId || 
+    const fallbackId = parsed.extend_fields?.requestId ||
+                      parsed.extend_fields?.traceId ||
                       Date.now().toString(36);
     parsed.id = `chatcmpl-${fallbackId}`;
     return true;
@@ -131,4 +135,25 @@ export function formatSSE(data, sourceFormat) {
   }
 
   return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+// Terminal frames for a stream that aborted after HTTP 200 was already sent, so
+// the status code can no longer change. OpenAI-compatible clients need the error
+// frame first, then [DONE] (openai-python raises APIError on any `data:` payload
+// carrying an `error` key, checked before [DONE]); Anthropic clients need
+// `event: error`. Never fabricate a successful finish_reason instead.
+//
+// Returns encoded bytes: onAbortTerminal callbacks are enqueued verbatim, same
+// as buildAbortedResponsesTerminalBytes.
+//
+// NOTE: non-SSE client formats (Ollama NDJSON) get an SSE frame here — dead in
+// practice because detectFormatByEndpoint never resolves to OLLAMA.
+export function buildStreamErrorBytes(statusCode, message, clientFormat) {
+  const { error } = buildErrorBody(statusCode, message);
+
+  const sse = clientFormat === FORMATS.CLAUDE
+    ? formatSSE({ type: "error", error }, FORMATS.CLAUDE)
+    : formatSSE({ error }, clientFormat) + SSE_DONE;
+
+  return sharedEncoder.encode(sse);
 }

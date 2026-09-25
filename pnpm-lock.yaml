@@ -92,9 +92,6 @@ importers:
       undici:
         specifier: ^7.19.2
         version: 7.27.2
-      uuid:
-        specifier: ^13.0.0
-        version: 13.0.2
       zustand:
         specifier: ^5.0.10
         version: 5.0.14(immer@11.1.8)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
@@ -2958,10 +2955,6 @@ packages:
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
-
-  uuid@13.0.2:
-    resolution: {integrity: sha512-vzi9uRZ926x4XV73S/4qQaTwPXM2JBj6/6lI/byHH1jOpCzb0zDbfytgA9LcN/hzb2l7WQSQnxITOVx5un/wGw==}
-    hasBin: true
 
   victory-vendor@37.3.6:
     resolution: {integrity: sha512-SbPDPdDBYp+5MJHhBCAyI7wKM3d5ivekigc2Dk2s7pgbZ9wIgIBYGVw4zGHBml/qTFbexrofXW6Gu4noGxrOwQ==}
@@ -6055,8 +6048,6 @@ snapshots:
 
   util-deprecate@1.0.2:
     optional: true
-
-  uuid@13.0.2: {}
 
   victory-vendor@37.3.6:
     dependencies:

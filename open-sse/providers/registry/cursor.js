@@ -23,7 +23,7 @@ export default {
       "Content-Type": "application/connect+proto",
       "User-Agent": "connect-es/1.6.1",
     },
-    clientVersion: "3.12.17",
+    clientVersion: "3.13.25",
   },
   models: [
     { id: "default", name: "Auto (Server Picks)" },
@@ -40,6 +40,7 @@ export default {
     { id: "gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
     { id: "gpt-5.2", name: "GPT 5.2" },
     { id: "gpt-5.3-codex", name: "GPT 5.3 Codex" },
+    { id: "composer-2.5", name: "Composer 2.5" },
   ],
   oauth: {
     apiEndpoint: "https://api2.cursor.sh",
@@ -48,7 +49,7 @@ export default {
     api3Endpoint: "https://api3.cursor.sh",
     agentEndpoint: "https://agent.api5.cursor.sh",
     agentNonPrivacyEndpoint: "https://agentn.api5.cursor.sh",
-    clientVersion: "3.12.17",
+    clientVersion: "3.13.25",
     clientType: "ide",
     dbKeys: {
       accessToken: "cursorAuth/accessToken",

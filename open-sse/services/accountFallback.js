@@ -37,7 +37,7 @@ export function checkFallbackError(status, errorText, backoffLevel = 0) {
     // Text-based rule: match substring in error message
     if (rule.text && lowerError && lowerError.includes(rule.text)) {
       if (rule.shouldFallback === false) {
-        return { shouldFallback: false, cooldownMs: 0 };
+        return { shouldFallback: false, cooldownMs: 0, isContentFilter: rule.isContentFilter === true };
       }
       if (rule.backoff) {
         const newLevel = Math.min(backoffLevel + 1, BACKOFF_CONFIG.maxLevel);
@@ -57,6 +57,18 @@ export function checkFallbackError(status, errorText, backoffLevel = 0) {
       }
       return { shouldFallback: true, cooldownMs: rule.cooldownMs };
     }
+  }
+
+  // Request-scoped client errors that matched no rule above: a 400 caused by the
+  // request itself (context overflow, malformed body, unsupported parameter) says
+  // nothing about the credential, so cooling the account down only removes a
+  // healthy connection from rotation — and with a single connection every later
+  // request in the window fails with a copy of this very error. Hand the upstream
+  // error back for this request instead. Account-scoped statuses keep their rules
+  // above (401/402/403/404/429), and quota / rate-limit / capacity wording still
+  // wins through the text rules.
+  if (status >= 400 && status < 500 && status !== 401 && status !== 402 && status !== 403 && status !== 429) {
+    return { shouldFallback: false, cooldownMs: 0 };
   }
 
   // Default: transient cooldown for any unmatched error
@@ -430,6 +442,11 @@ export function recordProviderFailure(provider, statusCode, errorText, log, conn
 
   // Only count failure-eligible status codes
   if (statusCode && !PROVIDER_FAILURE_ERROR_CODES.has(statusCode)) return;
+
+  // A moderation refusal is an answer about the request, not a provider outage.
+  // Counting it would let a handful of content-filter hits open the breaker and
+  // block every account on that provider.
+  if (checkFallbackError(statusCode, errorText).isContentFilter) return;
 
   const profile = getProviderResilienceProfile(provider);
   const breakerKey = `${provider}:${proxyHash}`;

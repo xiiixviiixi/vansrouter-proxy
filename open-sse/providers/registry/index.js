@@ -83,6 +83,7 @@ import p81 from "./ollama.js";
 import p82 from "./openai.js";
 import p83 from "./opencode-go.js";
 import p84 from "./opencode.js";
+import p84z from "./opencode-zen.js";
 import p85 from "./openrouter.js";
 import p86 from "./ovhcloud.js";
 import p87 from "./perplexity-agent.js";
@@ -143,6 +144,11 @@ import p141 from "./alitp-intl.js";
 import p142 from "./xquik.js";
 import p143 from "./ollama-search.js";
 import p144 from "./zed.js";
+import p145 from "./selfhosted-embedding.js";
+import p146 from "./selfhosted-stt.js";
+import p147 from "./selfhosted-tts.js";
+import p148 from "./qoder-cn.js";
+import p149 from "./tokenharbor.js";
 
 export default [
   p0,
@@ -230,6 +236,7 @@ export default [
   p82,
   p83,
   p84,
+  p84z,
   p85,
   p86,
   p87,
@@ -289,5 +296,10 @@ export default [
   p141,
   p142,
   p143,
-  p144
+  p144,
+  p145,
+  p146,
+  p147,
+  p148,
+  p149
 ];

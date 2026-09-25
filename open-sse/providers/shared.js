@@ -48,6 +48,29 @@ export const CLAUDE_CLI_SPOOF_HEADERS = {
   "X-Stainless-Timeout": "600"
 };
 
+// Auth header descriptors: { combined, header, scheme, anthropicVersion } — the
+// shape registry transports declare. Shared so every executor applies a token
+// the same way instead of re-implementing the scheme branch.
+export const BEARER_AUTH = { combined: true, header: "Authorization", scheme: "bearer" };
+export const XAPIKEY_AUTH = { combined: true, header: "x-api-key", scheme: "raw" };
+
+// Apply a token to a header per scheme (combined always sets, even when undefined).
+export function setAuth(headers, spec, token) {
+  headers[spec.header] = spec.scheme === "bearer" ? `Bearer ${token}` : token;
+}
+
+export function applyAuth(headers, desc, credentials) {
+  if (desc.combined) {
+    setAuth(headers, desc, credentials.apiKey || credentials.accessToken);
+    if (desc.anthropicVersion && !headers["anthropic-version"]) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+    return;
+  }
+  // split apiKey/oauth: set only the matching branch (legacy: anthropic-compatible skips when both absent)
+  if (credentials.apiKey) setAuth(headers, desc.apiKey, credentials.apiKey);
+  else if (credentials.accessToken) setAuth(headers, desc.oauth, credentials.accessToken);
+  if (desc.anthropicVersion && !headers["anthropic-version"]) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+}
+
 // Shared baseUrls
 export const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/v1/messages";
 

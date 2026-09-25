@@ -42,6 +42,7 @@ const getLocaleInfo = (locale) => {
     "hi": { name: "हिन्दी", flag: "🇮🇳" },
     "bn": { name: "বাংলা", flag: "🇧🇩" },
     "ur": { name: "اردو", flag: "🇵🇰" },
+    "fa": { name: "فارسی", flag: "🇮🇷" },
     "ro": { name: "Română", flag: "🇷🇴" },
     "sv": { name: "Svenska", flag: "🇸🇪" },
     "it": { name: "Italiano", flag: "🇮🇹" },
@@ -105,7 +106,7 @@ export default function LanguageSwitcher({ className = "", isOpen: controlledOpe
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ locale: nextLocale }),
       });
-      
+
       // Reload translations without full page reload
       await reloadTranslations();
       setLocale(nextLocale);

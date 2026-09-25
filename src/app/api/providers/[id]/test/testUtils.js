@@ -377,13 +377,30 @@ function isTokenExpired(connection) {
   return shouldRefreshCredentials(connection.provider, connection);
 }
 
-async function testOAuthConnection(connection, effectiveProxy = null) {
+// ponytail: minimal JWT payload decode, upgrade to full jwt lib if signature verification needed
+function decodeJwtPayload(token) {
+  try {
+    const parts = String(token || "").split(".");
+    return parts.length >= 2 ? JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function testOAuthConnection(connection, effectiveProxy = null) {
   const config = OAUTH_TEST_CONFIG[connection.provider];
   if (!config) return { valid: false, error: "Provider test not supported", refreshed: false };
   if (!connection.accessToken) return { valid: false, error: "No access token", refreshed: false };
 
   // Cursor uses protobuf API - can only verify token exists, not test endpoint
   if (config.tokenExists) {
+    if (connection.provider === "cursor") {
+      const payload = decodeJwtPayload(connection.accessToken);
+      const exp = Number(payload?.exp);
+      if (!Number.isNaN(exp) && (exp > 1e11 ? exp : exp * 1000) < Date.now()) {
+        return { valid: false, error: "Cursor token expired. Please re-import token from Cursor IDE." };
+      }
+    }
     return { valid: true, error: null, refreshed: false, newTokens: null };
   }
 

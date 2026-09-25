@@ -1,4 +1,5 @@
 import { handleChat } from "@/sse/handlers/chat.js";
+import { readBoundedJson } from "@/sse/utils/boundedBody.js";
 import { initTranslators } from "open-sse/translator/index.js";
 
 let initialized = false;
@@ -22,7 +23,7 @@ export async function OPTIONS() {
 
 /**
  * POST /v1/responses - OpenAI Responses API format
- * 
+ *
  * AI SDKs (e.g. @ai-sdk/openai) omit `stream` field for non-streaming calls.
  * chatCore.js treats `body.stream !== false` as stream:true, causing SSE response.
  * Fix: inject stream:false default before passing to handleChat.
@@ -30,7 +31,8 @@ export async function OPTIONS() {
 export async function POST(request) {
   await ensureInitialized();
   try {
-    const body = await request.json();
+    const { body, error } = await readBoundedJson(request);
+    if (error) return error;
     if (body.stream === undefined) {
       body.stream = false;
     }

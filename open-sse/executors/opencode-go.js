@@ -1,10 +1,11 @@
 import { BaseExecutor } from "./base.js";
-import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { PROVIDERS } from "../config/providers.js";
+import { getModelTargetFormat } from "../config/providerModels.js";
 import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
-import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
+import { applyAuth, BEARER_AUTH, XAPIKEY_AUTH } from "../providers/shared.js";
 import crypto from "node:crypto";
 import { resolveSessionId } from "../utils/sessionManager.js";
+import { baseModelId, normalizeOpencodeReasoning } from "../utils/opencodeIdentity.js";
 
 // Legacy model routing remains for callers that do not provide runtimeTransport.
 const MESSAGES_FORMAT_MODELS = new Set([
@@ -16,13 +17,6 @@ const MESSAGES_FORMAT_MODELS = new Set([
   "qwen3.7-max",
   "qwen3.7-plus",
   "qwen3.6-plus",
-]);
-
-const RESPONSES_MODELS = new Set([
-  "grok-4.6",
-  "gpt-5.6-luna",
-  "muse-spark-1.2-contributor",
-  "muse-spark-1.3-contributor",
 ]);
 
 const BASE = "https://opencode.ai/zen/go/v1";
@@ -56,44 +50,14 @@ function resolveOpencodeSession(body, credentials) {
   });
 }
 
-function baseModelId(model) {
-  return String(model || "")
-    .replace(/\([^()]+\)\s*$/, "")
-    .trim();
-}
 
+// Responses-only per the provider registry (grok-4.6, gpt-5.6-luna, muse-spark, …) —
+// never hardcode model ids here, config decides. getModelTargetFormat also strips the
+// thinking suffix, so "gpt-5.6-luna(high)" resolves to its base entry.
 function isResponsesModel(model) {
-  return RESPONSES_MODELS.has(baseModelId(model));
+  return getModelTargetFormat("opencode-go", model) === "openai-responses";
 }
 
-function normalizeOpencodeReasoning(model, body) {
-  const current = body.reasoning;
-  const currentReasoning =
-    current && typeof current === "object" && !Array.isArray(current)
-      ? current
-      : null;
-  const requestedEffort =
-    typeof body.reasoning_effort === "string"
-      ? body.reasoning_effort
-      : currentReasoning?.effort;
-  if (typeof requestedEffort !== "string") return;
-
-  const cleanModel = baseModelId(model || body.model);
-  const supportedLevels = getThinkingLevels("opencode", cleanModel);
-  let effort = requestedEffort.toLowerCase().trim();
-  if (
-    (effort === "max" || effort === "ultra") &&
-    supportedLevels?.length &&
-    !supportedLevels.includes(effort)
-  ) {
-    if (effort === "ultra" && supportedLevels.includes("max")) effort = "max";
-    else if (supportedLevels.includes("xhigh")) effort = "xhigh";
-  }
-
-  body.reasoning = { ...currentReasoning, effort };
-  if (!body.reasoning.summary) body.reasoning.summary = "auto";
-  delete body.reasoning_effort;
-}
 
 export class OpenCodeGoExecutor extends BaseExecutor {
   constructor() {
@@ -116,6 +80,8 @@ export class OpenCodeGoExecutor extends BaseExecutor {
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
     this._lastModel = model;
+    // Responses-only models keep /responses even when a stale runtimeTransport leaks in.
+    if (isResponsesModel(model)) return `${BASE}/responses`;
     const runtimeTransport = credentials?.runtimeTransport;
     if (runtimeTransport?.baseUrl) {
       return runtimeTransport.urlSuffix
@@ -132,7 +98,6 @@ export class OpenCodeGoExecutor extends BaseExecutor {
 
   buildHeaders(credentials, stream = true, model) {
     const runtimeTransport = credentials?.runtimeTransport;
-    const key = credentials?.apiKey || credentials?.accessToken;
     const effectiveModel = model || this._lastModel;
     const raw = Object.fromEntries(
       Object.entries(credentials?.rawHeaders || {}).map(([k, v]) => [k.toLowerCase(), v]),
@@ -154,18 +119,12 @@ export class OpenCodeGoExecutor extends BaseExecutor {
     headers["x-opencode-client"] ||= raw["x-opencode-client"] || "desktop";
     headers["x-opencode-request"] ||= raw["x-opencode-request"] || randomId("msg");
     headers["x-opencode-project"] ||= raw["x-opencode-project"] || "global";
-    const auth = runtimeTransport?.auth;
-    if (auth?.header) {
-      headers[auth.header] = auth.scheme === "bearer" ? `Bearer ${key}` : key;
-      if (auth.anthropicVersion && !headers["anthropic-version"]) {
-        headers["anthropic-version"] = ANTHROPIC_API_VERSION;
-      }
-    } else if (MESSAGES_FORMAT_MODELS.has(baseModelId(effectiveModel))) {
-      headers["x-api-key"] = key;
-      headers["anthropic-version"] = ANTHROPIC_API_VERSION;
-    } else {
-      headers["Authorization"] = `Bearer ${key}`;
-    }
+    const isMessages = MESSAGES_FORMAT_MODELS.has(baseModelId(effectiveModel));
+    applyAuth(
+      headers,
+      runtimeTransport?.auth || (isMessages ? { ...XAPIKEY_AUTH, anthropicVersion: true } : BEARER_AUTH),
+      credentials || {},
+    );
 
     if (stream) headers["Accept"] = "text/event-stream";
     return headers;
@@ -173,7 +132,7 @@ export class OpenCodeGoExecutor extends BaseExecutor {
 
   transformRequest(model, body, stream, credentials) {
     const isResponses = credentials?.runtimeTransport?.format === "openai-responses"
-      || (!credentials?.runtimeTransport && isResponsesModel(model));
+      || isResponsesModel(model);
     if (isResponses) {
       // Responses API names the output cap max_output_tokens and takes thinking
       // as reasoning:{effort,summary} — normalize the Chat fields at this boundary.

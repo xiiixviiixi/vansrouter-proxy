@@ -43,7 +43,7 @@ export const DEFAULT_CAPABILITIES = {
   tools: true, // function / tool calling
   reasoning: false, // thinking / reasoning
   // thinking wire format (only meaningful when reasoning:true). null → derive from transport.format.
-  // enum: openai|claude-adaptive|claude-budget|gemini-level|gemini-budget|zai|qwen|deepseek|kimi|minimax|hunyuan|step
+  // enum: openai|claude-adaptive|claude-budget|gemini-level|gemini-budget|zai|qwen|deepseek|kimi|minimax|hunyuan|step|commandcode
   thinkingFormat: null,
   thinkingCanDisable: true, // false → model cannot turn thinking off (clamp to min instead of disable)
   thinkingRange: null, // { min, max } for budget formats; null = no clamp
@@ -276,6 +276,26 @@ export const MODEL_CAPABILITIES = {
     thinkingFormat: "deepseek",
     contextWindow: 1000000,
     maxOutput: 384000,
+  },
+  // V4.1-Flash is natively multimodal (models.dev lists it with image input) and
+  // the retired v4-flash / vision-exp ids route to it upstream, so the live id
+  // carries the same image capability. "deepseek-flash" is the GA id on the
+  // DeepSeek API and used to fall through to the generic *deepseek* pattern,
+  // whose 128K/64K limits are repeated here: an exact entry short-circuits the
+  // pattern table, so a vision-only delta would drop them.
+  "deepseek-v4.1-flash": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "deepseek",
+    contextWindow: 1000000,
+    maxOutput: 384000,
+  },
+  "deepseek-flash": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "deepseek",
+    contextWindow: 128000,
+    maxOutput: 64000,
   },
 
   // Qwen plain coder/text (no vision) — registry "vision-model" / "coder-model" aliases
@@ -523,6 +543,21 @@ export const PROVIDER_CAPABILITIES = {
       maxOutput: 65536,
     },
   },
+  // glm-5.3-flash on OpenCode Go is served by a backend that rejects the z.ai
+  // `thinking` object (400: unknown field "thinking") and wants reasoning_effort.
+  // Overrides the global entry, whose z.ai shape is correct for z.ai itself.
+  "opencode-go": {
+    "glm-5.3-flash": {
+      vision: true,
+      videoInput: true,
+      pdf: true,
+      reasoning: true,
+      thinkingFormat: "openai",
+      thinkingCanDisable: false,
+      contextWindow: 1000000,
+      maxOutput: 131072,
+    },
+  },
   codex: {
     "gpt-5.6-sol": CODEX_GPT_56_SOL_CAPS,
     "gpt-5.6-sol-review": CODEX_GPT_56_SOL_CAPS,
@@ -664,6 +699,20 @@ export const PROVIDER_CAPABILITIES = {
       maxOutput: 32000,
     },
   },
+  // CodeBuddy intl — same gateway catalog as CN, so deepseek-v4.1-flash mirrors
+  // the codebuddy-cn entry (the openai-style reasoning_effort format matters:
+  // the generic *deepseek-v4* pattern would otherwise pick the vendor-native
+  // "deepseek" thinking shape, which the CodeBuddy gateway does not accept).
+  "codebuddy-intl": {
+    "deepseek-v4.1-flash": {
+      vision: true,
+      reasoning: true,
+      thinkingFormat: "openai",
+      thinkingCanDisable: true,
+      contextWindow: 1000000,
+      maxOutput: 128000,
+    },
+  },
   // ClinePass proxies through Vercel's OpenAI Chat Completions API, which only
   // accepts reasoning.effort in {none,minimal,low,medium,high,xhigh}. Force
   // "openai" so thinkingUnified.js emits valid Vercel enum values.
@@ -699,6 +748,28 @@ export const PROVIDER_CAPABILITIES = {
       thinkingCanDisable: true,
       contextWindow: 262144,
       maxOutput: 262144,
+    },
+  },
+  // DeepSeek V4.1 Flash reads images and takes the full low..max effort range
+  // (see PATTERN_THINKING); the shared *deepseek-v4* pattern carries neither flag.
+  deepseek: {
+    "deepseek-v4.1-flash": {
+      vision: true,
+      reasoning: true,
+      thinkingFormat: "deepseek",
+      thinkingEffortSupported: true,
+      contextWindow: 1000000,
+      maxOutput: 128000,
+    },
+  },
+  // Ollama Cloud serves the same model (mirrored tag) with image input.
+  ollama: {
+    "deepseek-v4.1-flash:cloud": {
+      vision: true,
+      reasoning: true,
+      thinkingFormat: "deepseek",
+      contextWindow: 1000000,
+      maxOutput: 384000,
     },
   },
 };
@@ -1427,14 +1498,27 @@ const MODALITY_KEYS = ["vision", "pdf", "audioInput", "videoInput"];
 
 // Catalog lookups, installed by the server at startup. Left as no-ops in the
 // browser bundle, where there is no file to read.
+//
+// The server bundles this module into every route chunk that needs it, and each
+// copy carries its own module state, so an install landing in the copy the
+// startup hook imported stays invisible to the copy resolving requests. The slot
+// lives on globalThis instead; the local binding is the fast path.
 let catalogSource = null;
 
 /**
  * Install the synced catalog reader (server only).
- * @param {{ getModalities: Function, getLimits: Function } | null} source
+ * @param {{ getModalities: (provider: string, model: string) => object|null,
+ *           getLimits: (provider: string, model: string) => object|null } | null} source
  */
 export function setCatalogSource(source) {
   catalogSource = source;
+  if (typeof globalThis !== "undefined") globalThis.__9rCatalogSource = source;
+}
+
+function getCatalogSource() {
+  if (catalogSource) return catalogSource;
+  if (typeof globalThis === "undefined") return null;
+  return (catalogSource = globalThis.__9rCatalogSource || null);
 }
 
 // Apply the synced catalog + name heuristic on top of a table-resolved result.
@@ -1443,15 +1527,16 @@ export function setCatalogSource(source) {
 function refine(base, provider, model) {
   const result = { ...DEFAULT_CAPABILITIES, ...base };
 
-  if (catalogSource) {
-    const modalities = catalogSource.getModalities(model);
+  const source = getCatalogSource();
+  if (source) {
+    const modalities = source.getModalities(provider, model);
     if (modalities) {
       for (const key of MODALITY_KEYS) {
         if (modalities[key] === true) result[key] = true;
       }
     }
 
-    const limits = catalogSource.getLimits(provider, model);
+    const limits = source.getLimits(provider, model);
     if (limits) {
       if (limits.contextWindow > 0) result.contextWindow = limits.contextWindow;
       if (limits.maxOutput > 0) result.maxOutput = limits.maxOutput;
@@ -1463,11 +1548,63 @@ function refine(base, provider, model) {
   return result;
 }
 
+// Mirrors the Command Code CLI text-only list (no image input). Everything else
+// on this provider takes images; only these ids stay text-only.
+const COMMANDCODE_TEXT_ONLY = new Set([
+  "deepseek/deepseek-v4-pro",
+  "deepseek/deepseek-v4-flash",
+  "deepseek/deepseek-v4-flash-fast",
+  "zai-org/glm-5.3",
+  "zai-org/glm-5.2",
+  "zai-org/glm-5.2-fast",
+  "zai-org/glm-5.1",
+  "zai-org/glm-5",
+  "minimaxai/minimax-m2.7",
+  "minimax/minimax-m2.7-free",
+  "minimaxai/minimax-m2.5",
+  "xiaomi/mimo-v2.5-pro",
+  "qwen/qwen3.6-max-preview",
+  "qwen/qwen3.7-max",
+  "meituan/longcat-2.0:free",
+  "stepfun/step-3.5-flash",
+  "tencent/hy4-preview",
+  "tencent/hy3",
+  "tencent/hy3-paid",
+  "nvidia/nemotron-3-ultra-550b-a55b",
+  "poolside/laguna-s-2.1-free",
+  "inclusionai/ling-3.0-flash-free",
+  "inclusionai/ling-3.0-flash-sante:free",
+]);
+
+function isCommandCodeTextOnly(model) {
+  const key = String(model || "").toLowerCase();
+  if (COMMANDCODE_TEXT_ONLY.has(key)) return true;
+  for (const id of COMMANDCODE_TEXT_ONLY) {
+    const base = id.slice(id.lastIndexOf("/") + 1);
+    if (key === base || key.endsWith("/" + base)) return true;
+  }
+  return false;
+}
+
 export function getCapabilitiesForModel(provider, model) {
   if (!model) return { ...DEFAULT_CAPABILITIES };
 
   // Canonical exact lookup strips vendor prefix: "anthropic/claude-opus-4.7" -> "claude-opus-4.7".
   const baseModel = model.includes("/") ? model.split("/").pop() : model;
+
+  // CommandCode serves every model over one /alpha/generate wire, so the family
+  // patterns below (deepseek-v4 → thinkingFormat deepseek, no vision) must not win.
+  if (provider === "commandcode" || provider === "cmc") {
+    return {
+      ...DEFAULT_CAPABILITIES,
+      reasoning: true,
+      thinkingFormat: "commandcode",
+      thinkingEffortSupported: true,
+      vision: !isCommandCodeTextOnly(model),
+      contextWindow: 1000000,
+      maxOutput: 384000,
+    };
+  }
 
   // 1. Provider-specific override
   if (provider) {

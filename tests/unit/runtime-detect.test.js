@@ -84,9 +84,9 @@ describe("detectRuntime", () => {
     expect(detectRuntime()).toBe("systemd");
   });
 
-  it("returns 'systemd' when /run/systemd/system exists (no env marker)", () => {
+  it("returns 'direct' when /run/systemd/system exists without service env markers (interactive shell)", () => {
     setFiles({ "/run/systemd/system": true });
-    expect(detectRuntime()).toBe("systemd");
+    expect(detectRuntime()).toBe("direct");
   });
 
   it("returns 'tmux' when TMUX is set", () => {

@@ -51,13 +51,21 @@ describe("Database location & fallback path rules", () => {
     expect(compose.volumes["vansrouter-data"]).toEqual({ name: "vansrouter-data" });
 
     const dockerfile = read("Dockerfile");
-    expect(dockerfile).toContain("/migration-data");
-    expect(dockerfile).toContain("[ ! -f /app/data/db/.legacy-volume-migrated ]");
-    expect(dockerfile).toContain("[ ! -e /app/data/db/data.sqlite ]");
-    expect(dockerfile).toContain("[ -d /migration-data ]");
-    expect(dockerfile).toContain("copy_missing() {");
-    expect(dockerfile).toContain('copy_missing /migration-data /app/data');
-    expect(dockerfile).toContain('elif [ ! -e "$destination" ]; then');
-    expect(dockerfile).toContain("touch /app/data/db/.legacy-volume-migrated");
+    // The legacy-volume migration lives in the supervisor entrypoint script
+    // (moved out of the Dockerfile in the Debian/Render overlay). The
+    // Dockerfile must wire that script in as the container entrypoint, and
+    // the script itself must keep the no-overwrite migration contract.
+    expect(dockerfile).toContain("scripts/docker-entrypoint.sh");
+    expect(dockerfile).toContain('ENTRYPOINT ["/entrypoint.sh"]');
+
+    const entrypoint = read("scripts/docker-entrypoint.sh");
+    expect(entrypoint).toContain("/migration-data");
+    expect(entrypoint).toContain("[ ! -f /app/data/db/.legacy-volume-migrated ]");
+    expect(entrypoint).toContain("[ ! -e /app/data/db/data.sqlite ]");
+    expect(entrypoint).toContain("[ -d /migration-data ]");
+    expect(entrypoint).toContain("copy_missing() {");
+    expect(entrypoint).toContain("copy_missing /migration-data /app/data");
+    expect(entrypoint).toContain('[ ! -e "$destination" ]');
+    expect(entrypoint).toContain("touch /app/data/db/.legacy-volume-migrated");
   });
 });

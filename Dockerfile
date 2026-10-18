@@ -37,7 +37,7 @@ RUN npm init -y && \
 
 # Tailscale static binaries (bundled so tunnel works in Docker).
 # Fetches the latest stable tailscale and tailscaled. Override with --build-arg.
-FROM alpine:3.19 AS tailscale
+FROM alpine:3.24 AS tailscale
 ARG TAILSCALE_VERSION=1.80.3
 ARG TARGETARCH
 RUN apk add --no-cache curl ca-certificates && \

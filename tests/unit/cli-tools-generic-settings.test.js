@@ -195,7 +195,7 @@ describe("cli-tools dynamic settings routes", () => {
     });
 
     await post(smelt, { baseUrl: "https://router.example", model: "cc/claude-sonnet-5" });
-    expect(readJson(SMELT_PATH)).toMatchObject({ apiKey: "sk_9router", model: "cc/claude-sonnet-5" });
+    expect(readJson(SMELT_PATH)).toMatchObject({ apiKey: "", model: "cc/claude-sonnet-5" });
 
     await post(smelt, { baseUrl: "https://router.example" });
     expect(readJson(SMELT_PATH).model).toBe("cc/claude-sonnet-5");

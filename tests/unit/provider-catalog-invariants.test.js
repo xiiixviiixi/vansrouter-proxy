@@ -57,6 +57,7 @@ const PROTECTED = {
       "claude-sonnet-5",
       "claude-fable-5-1",
       "claude-fable-5",
+      "claude-sonnet-5-5",
     ],
   },
   kiro: {
@@ -64,6 +65,10 @@ const PROTECTED = {
     alias: "kr",
     uiAlias: "kr",
     modelIds: [
+      "claude-opus-5.5",
+      "claude-opus-5.5-thinking",
+      "claude-opus-5.5-agentic",
+      "claude-opus-5.5-thinking-agentic",
       "claude-opus-5",
       "claude-opus-5-thinking",
       "claude-opus-5-agentic",

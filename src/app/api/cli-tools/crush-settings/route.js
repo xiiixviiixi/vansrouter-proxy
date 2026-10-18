@@ -1,13 +1,14 @@
 "use server";
 
 import { NextResponse } from "next/server";
+import { resolveCliApiKey } from "../resolveApiKey.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { probeCliInstalled, readJsoncFile } from "../_shared/cliConfig.js";
+import { exec } from "child_process";
+import { promisify } from "util";
 
-const PROVIDER_ID = "9router";
-const DEFAULT_CONTEXT_WINDOW = 128000;
+const execAsync = promisify(exec);
 
 const getCrushConfigPath = () => {
   const configDir = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
@@ -16,21 +17,50 @@ const getCrushConfigPath = () => {
 
 const getCrushDir = () => path.dirname(getCrushConfigPath());
 
-const checkCrushInstalled = () => probeCliInstalled("crush", [getCrushConfigPath()]);
-const readConfig = () => readJsoncFile(getCrushConfigPath());
+const checkCrushInstalled = async () => {
+  const isWindows = os.platform() === "win32";
+  try {
+    const command = isWindows ? "where crush" : "which crush";
+    await execAsync(command, { windowsHide: true });
+    return true;
+  } catch {
+    try {
+      await fs.access(getCrushConfigPath());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
 
-const has9RouterConfig = (config) => {
-  const providers = config?.providers;
-  if (!providers) return false;
-  if (providers[PROVIDER_ID]?.base_url) return true;
-  return Object.values(providers).some((provider) => provider?.base_url?.includes("20128"));
+const has9RouterConfig = (settings) => {
+  if (!settings || !settings.providers) return false;
+  const p = settings.providers["9router"];
+  if (p && p.base_url) return true;
+  for (const prov of Object.values(settings.providers)) {
+    if (prov.base_url && prov.base_url.includes("20128")) return true;
+  }
+  return false;
+};
+
+const readConfig = async () => {
+  try {
+    const content = await fs.readFile(getCrushConfigPath(), "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
 };
 
 export async function GET() {
   try {
     const installed = await checkCrushInstalled();
     if (!installed) {
-      return NextResponse.json({ installed: false, config: null, message: "Crush CLI is not installed" });
+      return NextResponse.json({
+        installed: false,
+        config: null,
+        message: "Crush CLI is not installed",
+      });
     }
 
     const config = await readConfig();
@@ -41,22 +71,21 @@ export async function GET() {
       has9Router: has9RouterConfig(config),
       configPath: getCrushConfigPath(),
     });
-  } catch (error) {
-    console.log("Error checking crush settings:", error);
-    return NextResponse.json({ error: { message: "Failed to check crush settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function POST(request) {
-  let body;
+  let rawBody;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     return NextResponse.json({ error: { message: "Invalid JSON body" } }, { status: 400 });
   }
 
   try {
-    const { baseUrl, apiKey, model } = body || {};
+    const { baseUrl, apiKey, model } = rawBody || {};
     if (!baseUrl) {
       return NextResponse.json({ error: { message: "baseUrl is required" } }, { status: 400 });
     }
@@ -64,43 +93,63 @@ export async function POST(request) {
     const configPath = getCrushConfigPath();
     await fs.mkdir(getCrushDir(), { recursive: true });
 
-    const existing = (await readConfig()) || {};
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = JSON.parse(raw);
+    } catch {
+      /* No existing config */
+    }
+
     if (!existing.providers) existing.providers = {};
 
+    const normalizedBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
     const modelId = model || "provider/model-id";
-    existing.providers[PROVIDER_ID] = {
+
+    existing.providers["9router"] = {
       type: "openai-compat",
-      base_url: baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`,
-      api_key: apiKey || "sk_9router",
-      models: [{ id: modelId, name: modelId, context_window: DEFAULT_CONTEXT_WINDOW }],
+      base_url: normalizedBaseUrl,
+      api_key: await resolveCliApiKey(apiKey),
+      models: [
+        {
+          id: modelId,
+          name: modelId,
+          context_window: 128000,
+        },
+      ],
     };
 
     await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
 
-    return NextResponse.json({ success: true, message: "Crush settings applied successfully!", configPath });
-  } catch (error) {
-    console.log("Error updating crush settings:", error);
-    return NextResponse.json({ error: { message: "Failed to update crush settings" } }, { status: 500 });
+    return NextResponse.json({
+      success: true,
+      message: "Crush settings applied successfully!",
+      configPath,
+    });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function DELETE() {
   try {
     const configPath = getCrushConfigPath();
-    const existing = await readConfig();
-    if (!existing) {
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = JSON.parse(raw);
+    } catch {
       return NextResponse.json({ success: true, message: "No config file to reset" });
     }
 
-    if (existing.providers?.[PROVIDER_ID]) {
-      delete existing.providers[PROVIDER_ID];
+    if (existing.providers && existing.providers["9router"]) {
+      delete existing.providers["9router"];
       if (Object.keys(existing.providers).length === 0) delete existing.providers;
       await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
     }
 
     return NextResponse.json({ success: true, message: "9Router removed from Crush" });
-  } catch (error) {
-    console.log("Error resetting crush settings:", error);
-    return NextResponse.json({ error: { message: "Failed to reset crush settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }

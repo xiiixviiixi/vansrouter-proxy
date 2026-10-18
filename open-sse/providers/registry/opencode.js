@@ -26,6 +26,7 @@ export default {
   },
   models: [
     // Endpoint formats differ per model, so declare non-chat models explicitly.
+    { id: "space-bunny-free", name: "Space Bunny Free" },
     { id: "muse-spark-1.2-contributor-free", name: "Muse Spark 1.2 Contributor Free", targetFormat: "openai-responses" },
     { id: "muse-spark-1.3-contributor-free", name: "Muse Spark 1.3 Contributor Free", targetFormat: "openai-responses" },
     { id: "union-alpha", name: "Union Alpha Free", targetFormat: "claude" },

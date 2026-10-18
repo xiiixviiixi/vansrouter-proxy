@@ -23,6 +23,13 @@ export function mapStainlessArch() {
 // Anthropic API version (single source — reused across claude-format providers/executors)
 export const ANTHROPIC_API_VERSION = "2023-06-01";
 
+// Claude CLI version — surfaced in the claude-cli User-Agent (reset-grant gated on surface)
+export const CLAUDE_CLI_VERSION = "2.1.280";
+
+// Matched pair from one Cursor release — bump together.
+export const CURSOR_IDE_VERSION = "3.13.25";
+export const CURSOR_IDE_COMMIT = "d5c0e77a0214208f36b56d42e8e787de88d02ea4";
+
 // Shared Claude-compatible API headers (reused across claude-format providers)
 export const CLAUDE_API_HEADERS = {
   "Anthropic-Version": ANTHROPIC_API_VERSION,
@@ -35,7 +42,7 @@ export const CLAUDE_CLI_SPOOF_HEADERS = {
   "Anthropic-Version": ANTHROPIC_API_VERSION,
   "Anthropic-Beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28,advisor-tool-2026-03-01,extended-cache-ttl-2025-04-11,cache-diagnosis-2026-04-07",
   "Anthropic-Dangerous-Direct-Browser-Access": "true",
-  "User-Agent": "claude-cli/2.1.195 (external, cli)",
+  "User-Agent": `claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`,
   "X-App": "cli",
   "X-Stainless-Helper-Method": "stream",
   "X-Stainless-Retry-Count": "0",
@@ -69,6 +76,11 @@ export function applyAuth(headers, desc, credentials) {
   if (credentials.apiKey) setAuth(headers, desc.apiKey, credentials.apiKey);
   else if (credentials.accessToken) setAuth(headers, desc.oauth, credentials.accessToken);
   if (desc.anthropicVersion && !headers["anthropic-version"]) headers["anthropic-version"] = ANTHROPIC_API_VERSION;
+}
+
+export function mergeAnthropicBeta(...values) {
+  const flags = values.flatMap((v) => (typeof v === "string" ? v.split(",") : [])).map((f) => f.trim()).filter(Boolean);
+  return [...new Set(flags)].join(",");
 }
 
 // Shared baseUrls

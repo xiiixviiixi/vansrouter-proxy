@@ -75,7 +75,6 @@ describe("shared/components barrel (lazy modal exports)", () => {
     "Sidebar",
     "Header",
     "Footer",
-    "UsageStats",
     "LanguageSwitcher",
     "NineRemoteButton",
     "HeaderMenu",
@@ -106,4 +105,10 @@ describe("shared/components barrel (lazy modal exports)", () => {
       expect(ok, `${name} must remain an eager export`).toBe(true);
     });
   }
+
+  // UsageStats pulls in recharts (~589KB). It stays out of the barrel so
+  // dashboard routes that never render it do not pay for it.
+  it("keeps the recharts-backed UsageStats out of the barrel", () => {
+    expect(barrelSource).not.toMatch(/UsageStats/);
+  });
 });

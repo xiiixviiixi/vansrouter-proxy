@@ -1,8 +1,14 @@
+"use server";
+
 import { NextResponse } from "next/server";
-import { probeCliInstalled } from "../_shared/cliConfig.js";
+import { resolveCliApiKey } from "../resolveApiKey.js";
+import { exec } from "child_process";
+import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+
+const execAsync = promisify(exec);
 
 const PROVIDER_NAME = "9router";
 
@@ -62,7 +68,21 @@ model = "${model}"
 const DEFAULT_CONFIG = `provider = "deepseek"
 `;
 
-const checkDeepSeekInstalled = () => probeCliInstalled("deepseek", [getDeepSeekConfigPath()]);
+const checkDeepSeekInstalled = async () => {
+    try {
+        const isWindows = os.platform() === "win32";
+        const command = isWindows ? "where deepseek" : "which deepseek";
+        await execAsync(command, { windowsHide: true });
+        return true;
+    } catch {
+        try {
+            await fs.access(getDeepSeekConfigPath());
+            return true;
+        } catch {
+            return false;
+        }
+    }
+};
 
 const readConfigToml = async () => {
     try {
@@ -98,6 +118,7 @@ export async function GET() {
             configPath: getDeepSeekConfigPath(),
         });
     } catch (error) {
+        console.log("Error checking deepseek-tui settings:", error);
         return NextResponse.json({ error: "Failed to check deepseek-tui settings" }, { status: 500 });
     }
 }
@@ -112,7 +133,7 @@ export async function POST(request) {
         const dir = getDeepSeekDir();
         await fs.mkdir(dir, { recursive: true });
 
-        const newConfig = build9RouterConfig(baseUrl, apiKey || "sk_9router", model);
+        const newConfig = build9RouterConfig(baseUrl, await resolveCliApiKey(apiKey), model);
         await fs.writeFile(getDeepSeekConfigPath(), newConfig);
 
         return NextResponse.json({
@@ -121,6 +142,7 @@ export async function POST(request) {
             configPath: getDeepSeekConfigPath(),
         });
     } catch (error) {
+        console.log("Error updating deepseek-tui settings:", error);
         return NextResponse.json({ error: "Failed to update deepseek-tui settings" }, { status: 500 });
     }
 }
@@ -128,14 +150,16 @@ export async function POST(request) {
 export async function DELETE() {
     try {
         const configPath = getDeepSeekConfigPath();
-        const existing = await readConfigToml();
-        if (!existing) {
+        try {
+            await fs.access(configPath);
+        } catch {
             return NextResponse.json({ success: true, message: "No config file to reset" });
         }
 
         await fs.writeFile(configPath, DEFAULT_CONFIG);
         return NextResponse.json({ success: true, message: `${PROVIDER_NAME} config reset to DeepSeek defaults` });
     } catch (error) {
+        console.log("Error resetting deepseek-tui settings:", error);
         return NextResponse.json({ error: "Failed to reset deepseek-tui settings" }, { status: 500 });
     }
 }

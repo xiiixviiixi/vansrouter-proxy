@@ -22,14 +22,11 @@ export function claudeToOpenAIResponse(chunk, state) {
   const results = [];
   const event = chunk.type;
 
-  // Only wrap Claude thinking blocks with <think>…</think> content tags for
-  // native Claude models. OpenAI-style reasoning models (GLM-5.2, GPT-5.5,
-  // …) proxied through Claude-format transports (e.g. AgentRouter) already
-  // surface reasoning via the OpenAI-native reasoning_content field; emitting
-  // <think>…</think> alongside produces duplicate markers that leak as plain
-  // text in clients like OpenCode that already captured reasoning_content as
-  // 'thought'. See .kimchi/docs/ferment-handoff.md Ferment 4 Phase 2.
-  const wrapThinkTags = (state.model || "").toLowerCase().includes("claude");
+  // Thinking is emitted as reasoning_content only — no <think>/</think> markers
+  // in content. The markers used to be gated to native Claude models, but the
+  // thinking text already travels in reasoning_content, so the pair arrived
+  // empty and adjacent and OpenAI-format clients (OpenCode, DeepSeek Harness)
+  // rendered a bare "<think></think>" above every answer (#3399, #4199).
 
   switch (event) {
     case "message_start": {
@@ -68,10 +65,6 @@ export function claudeToOpenAIResponse(chunk, state) {
       }
       if (block?.type === CLAUDE_BLOCK.TEXT) {
         state.textBlockStarted = true;
-      } else if (block?.type === CLAUDE_BLOCK.THINKING) {
-        state.inThinkingBlock = true;
-        state.currentBlockIndex = chunk.index;
-        if (wrapThinkTags) results.push(createChunk(state, { content: "<think>" }));
       } else if (block?.type === CLAUDE_BLOCK.TOOL_USE) {
         const toolCallIndex = state.toolCallIndex++;
         // Restore original tool name from mapping (Claude OAuth)
@@ -99,6 +92,8 @@ export function claudeToOpenAIResponse(chunk, state) {
         state.hasEmittedContent = true;
         results.push(createChunk(state, { content: delta.text }));
       } else if (delta?.type === "thinking_delta" && delta.thinking) {
+        // Thinking travels only in reasoning_content. No "<think>" markers in
+        // content: OpenAI-format clients render them as literal text.
         results.push(createChunk(state, reasoningDelta(delta.thinking)));
       } else if (delta?.type === "input_json_delta" && delta.partial_json) {
         const toolCall = state.toolCalls.get(chunk.index);
@@ -121,10 +116,6 @@ export function claudeToOpenAIResponse(chunk, state) {
       if (chunk.index === state.serverToolBlockIndex) {
         state.serverToolBlockIndex = -1;
         break;
-      }
-      if (state.inThinkingBlock && chunk.index === state.currentBlockIndex) {
-        if (wrapThinkTags) results.push(createChunk(state, { content: "</think>" }));
-        state.inThinkingBlock = false;
       }
       state.textBlockStarted = false;
       state.thinkingBlockStarted = false;

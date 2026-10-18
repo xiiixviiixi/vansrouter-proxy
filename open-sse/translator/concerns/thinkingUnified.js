@@ -4,6 +4,7 @@
 
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import { PROVIDERS } from "../../providers/index.js";
+import { getThinkingLevels } from "../../providers/thinkingLevels.js";
 import { LEVEL_TO_BUDGET, budgetToLevel, effortToBudget, effortToThinkingLevel } from "./thinking.js";
 
 // Map a target wire-format to its native thinking format (when capability has none).
@@ -99,9 +100,28 @@ export function extractThinking(body) {
   return null;
 }
 
-// Capture thinking intent from a body. Alias of extractThinking, named for clarity
-// at the call-site where intent is snapshotted before format translation.
-export const captureThinking = extractThinking;
+// Capture thinking intent from a body before format translation strips it.
+// Besides the effort, records whether an OpenAI-shaped client wants the thinking
+// text itself: Claude returns it only with thinking.display "summarized", a field
+// OpenAI has no equivalent for, so the intent cannot survive translation on its own.
+export function captureThinking(body) {
+  const cfg = extractThinking(body);
+  if (!cfg || cfg.mode === "none") return cfg;
+  const display = openAIThinkingDisplay(body);
+  return display ? { ...cfg, display } : cfg;
+}
+
+function openAIThinkingDisplay(body) {
+  // Responses API: reasoning.summary is the explicit request for reasoning text.
+  if (body.reasoning && typeof body.reasoning === "object") {
+    const summary = body.reasoning.summary;
+    return typeof summary === "string" && summary && summary !== "none" ? "summarized" : undefined;
+  }
+  // Chat Completions has no summary knob. A client setting reasoning_effort is
+  // asking for reasoning, and reasoning_content is how it would receive it.
+  if (typeof body.reasoning_effort === "string") return "summarized";
+  return undefined;
+}
 
 // Resolve thinking format: provider override > capability > derive(targetFormat).
 function resolveFormat(targetFormat, model, provider) {
@@ -220,7 +240,7 @@ function stripAll(body) {
 }
 
 // Apply unified thinking config to body in the resolved provider-native format.
-function applyFormat(fmt, body, cfg, caps) {
+function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
   const none = cfg.mode === "none";
   const canDisable = caps.thinkingCanDisable !== false;
   // Model cannot disable thinking → clamp "none" to minimal effort instead.
@@ -241,15 +261,19 @@ function applyFormat(fmt, body, cfg, caps) {
       // ("thinking is off unless you explicitly set it"), and Anthropic-compatible
       // shims (e.g. GitHub Copilot /v1/messages) default thinking off even for
       // Sonnet 5. Send both fields — the documented adaptive-thinking shape.
-      body.thinking = { type: "adaptive" };
+      body.thinking = { type: "adaptive", ...(display ? { display } : {}) };
       const level = toLevel(eff);
-      body.output_config = { effort: level === "xhigh" ? "high" : level };
+      // xhigh is model-gated (Opus/Sonnet 4.6 reject it) — clamp when not advertised.
+      body.output_config = { effort: level === "auto" ? "high"
+        : level === "xhigh" && !supportedLevels?.includes("xhigh") ? "high" : level };
       break;
     }
     case "claude-budget": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       const budget = toBudget(eff, caps.thinkingRange);
-      body.thinking = budget === -1 ? { type: "enabled" } : { type: "enabled", budget_tokens: budget || 8192 };
+      body.thinking = budget === -1
+        ? { type: "enabled", ...(display ? { display } : {}) }
+        : { type: "enabled", budget_tokens: budget || 8192, ...(display ? { display } : {}) };
       break;
     }
     case "gemini-level": {
@@ -293,9 +317,12 @@ function applyFormat(fmt, body, cfg, caps) {
     case "deepseek": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       body.thinking = { type: "enabled" };
-      // DeepSeek: low/medium→high, xhigh/max→max.
+      // DeepSeek: low/medium→high, xhigh/max→max. Some backends (mimo v2.5-pro/v2.6
+      // on opencode-go, probed live) 400 on "max" — clamp to high when the declared
+      // levels exclude it.
       const level = toLevel(eff);
-      body.reasoning_effort = level === "xhigh" || level === "max" ? "max" : "high";
+      const want = level === "xhigh" || level === "max" ? "max" : "high";
+      body.reasoning_effort = want === "max" && supportedLevels && !supportedLevels.includes("max") ? "high" : want;
       break;
     }
     case "kimi": {
@@ -377,7 +404,15 @@ export function applyThinking(targetFormat, model, body, provider = null, intent
     return body;
   }
 
+  // Read the display BEFORE stripAll removes body.thinking, or a Claude-format
+  // client's explicit display would be lost. Anthropic's `display` (summarized |
+  // omitted) decides whether thinking text comes back at all — without it Claude
+  // redacts every block to a signature. An OpenAI-shaped client's ask arrives as
+  // intent.display, captured pre-translation by captureThinking.
+  const display = typeof body.thinking?.display === "string" ? body.thinking.display : intent?.display;
   stripAll(body);
-  applyFormat(fmt, body, effectiveCfg, caps);
+  // Declared level ceiling for this model, so a format's effort mapping can clamp
+  // a level the model rejects (e.g. deepseek "max" on the mimo v2.5-pro/v2.6 backends).
+  applyFormat(fmt, body, effectiveCfg, caps, getThinkingLevels(provider, cleanModel), display);
   return body;
 }

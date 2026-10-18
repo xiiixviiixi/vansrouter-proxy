@@ -20,7 +20,7 @@ export default {
     thinkingFormat: "openai",
   },
   models: [
-    { id: "auto:free", name: "Auto Free (Zero Cost)" },
+    { id: "auto:free", name: "Auto Free (Zero Cost)", hasFree: true },
     { id: "claude-opus-4.7", name: "Claude Opus 4.7" },
     { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6" },
     { id: "claude-haiku-4.5", name: "Claude Haiku 4.5" },

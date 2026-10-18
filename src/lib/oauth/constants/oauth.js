@@ -122,6 +122,103 @@ export const GROK_CLI_CONFIG = { ...PROVIDER_OAUTH["grok-cli"] };
 // Freebuff OAuth Configuration (Device Code Flow)
 export const FREEBUFF_CONFIG = { ...PROVIDER_OAUTH["freebuff"] };
 
+// Muse — subscription device code flow to auth.meta.com, no refresh
+// (Meta rejects refresh_token grants; the minted Model API key never expires).
+export const MUSE_CONFIG = { ...PROVIDER_OAUTH["muse"] };
+
+// Trae (ByteDance marscode) OAuth — authorization_code flow with local callback.
+//   1) POST GetLoginGuidance {loginTraceID} → {Result.LoginHost}
+//   2) Browser opens ${loginHost}/authorization?client_id=...&login_trace_id=...&auth_callback_url=${cb}
+//   3) Redirect → ${cb}?refreshToken=...&loginHost=...&isRedirect=true
+//   4) POST ExchangeToken {ClientID, RefreshToken, ClientSecret:"-"} → {Result.AccessToken, ExpiresAt}
+//   5) POST GetUserInfo (x-cloudide-token) → email/name
+// Xiaomi MiMo Desktop OAuth — custom ECDH encrypted-callback flow (NOT standard OAuth2).
+//   1) Client generates X25519 keypair
+//   2) Browser opens ${platformUrl}/authorize?pk=<pubkey>&redirect_uri=http://localhost:<port>/&kn=mimocode&key_name=...
+//   3) Redirect → http://localhost:<port>/?u=<base64 encrypted payload>
+//   4) Decrypt: ECDH(shared) → SHA256 → AES-256-GCM
+//      Layout: [12-byte nonce][32-byte ephemeral pubkey][ciphertext][16-byte GCM tag]
+//   5) Result JSON: { uid, sk, url }
+export const XIAOMI_MIMO_CONFIG = {
+  platformUrl: process.env.MIMO_PLATFORM_URL || "https://platform.xiaomimimo.com",
+  defaultBaseUrl: "https://api.xiaomimimo.com/v1",
+  kn: "mimocode",
+  callbackPath: "/",
+  timeoutMs: 300000, // 5 minutes
+};
+
+export const TRAE_CONFIG = {
+  clientId: "ono9krqynydwx5",
+  clientSecret: "-",
+  loginGuidanceUrls: [
+    "https://api.marscode.com/cloudide/api/v3/trae/GetLoginGuidance",
+    "https://api.trae.ai/cloudide/api/v3/trae/GetLoginGuidance",
+    "https://www.trae.ai/cloudide/api/v3/trae/GetLoginGuidance",
+  ],
+  apiOrigins: [
+    "https://api.marscode.com",
+    "https://api.trae.ai",
+    "https://www.trae.ai",
+    "https://www.marscode.com",
+  ],
+  exchangeTokenPath: "/cloudide/api/v3/trae/oauth/ExchangeToken",
+  getUserInfoPath: "/cloudide/api/v3/trae/GetUserInfo",
+  authorizationPath: "/authorization",
+  callbackPath: "/callback",
+  minAppVersion: "3.5.54",
+  defaultAppVersion: "3.5.54",
+  defaultAppType: "stable",
+  defaultPluginVersion: "local",
+  // service machine id is derived at runtime; device_id "0" is the stable default
+  defaultDeviceId: "0",
+  userAgent: "Trae/1.0.0 antigravity-cockpit-tools",
+  webUrl: "https://www.trae.ai",
+  authScheme: "Cloud-IDE-JWT",
+  tokenLifetimeDays: 14,
+  oauthTimeoutMs: 600_000,
+};
+
+// Windsurf / Devin CLI OAuth — authorization_code (implicit) flow with local callback.
+//   1) Browser opens windsurf.com/windsurf/signin?response_type=token&client_id=...&redirect_uri=${cb}
+//   2) Redirect → ${cb}?access_token=${firebaseJWT}&state=...
+//   3) POST RegisterUser {firebase_id_token} → {apiKey, apiServerUrl, name}
+//   4) POST GetOneTimeAuthToken → GetCurrentUser (best-effort email/plan)
+export const WINDSURF_CONFIG = {
+  clientId: "3GUryQ7ldAeKEuD2obYnppsnmj58eP5u",
+  authBaseUrl: "https://www.windsurf.com",
+  signInPath: "/windsurf/signin",
+  registerApiBaseUrl: "https://register.windsurf.com",
+  registerPath: "/exa.seat_management_pb.SeatManagementService/RegisterUser",
+  oneTimeAuthPath: "/exa.seat_management_pb.SeatManagementService/GetOneTimeAuthToken",
+  currentUserPath: "/exa.seat_management_pb.SeatManagementService/GetCurrentUser",
+  planStatusPath: "/exa.seat_management_pb.SeatManagementService/GetPlanStatus",
+  userStatusPath: "/exa.seat_management_pb.SeatManagementService/GetUserStatus",
+  defaultApiServerUrl: "https://server.codeium.com",
+  firebaseApiKey: "AIzaSyDsOl-1XpT5err0Tcn0TFFod1H8gVGIycY",
+  callbackPath: "/windsurf-auth-callback",
+  userAgent: "antigravity-cockpit-tools",
+  oauthTimeoutMs: 600_000,
+};
+
+// GLM Coding (Z.ai) OAuth — ZCode CLI polling flow (NOT PKCE): init mints a
+// one-off poll token, the browser opens the server-generated authorize_url,
+// poll/ready returns the tokens. The Z.AI OAuth token is then exchanged for a
+// platform business JWT and finally a long-lived coding-plan API key (no
+// refresh grant).
+export const GLM_OAUTH_CONFIG = { ...PROVIDER_OAUTH["glm"] };
+
+// Zed hosted LLM aggregator — RSA keypair native-app auth (NOT OAuth).
+// Client generates ephemeral RSA-2048 keypair; user signs in at zed.dev/native_app_signin;
+// Zed redirects to local callback with access_token RSA-encrypted against our public key.
+// See open-sse/shared/zedAuth.js for the keypair/decrypt helpers.
+export const ZED_HOSTED_CONFIG = {
+  webBaseUrl: "https://zed.dev",
+  cloudBaseUrl: "https://cloud.zed.dev",
+  llmBaseUrl: "https://cloud.zed.dev",
+  defaultNativeAppPort: 58443,
+  oauthTimeoutMs: 600_000,
+};
+
 // OAuth timeout (5 minutes)
 export const OAUTH_TIMEOUT = 300000;
 
@@ -149,4 +246,8 @@ export const PROVIDERS = {
   KIMCHI: "kimchi",
   GROK_CLI: "grok-cli",
   FREEBUFF: "freebuff",
+  TRAE: "trae",
+  WINDSURF: "windsurf",
+  GLM: "glm",
+  ZED: "zed",
 };

@@ -1,61 +1,104 @@
 "use server";
 
 import { NextResponse } from "next/server";
+import { resolveCliApiKey } from "../resolveApiKey.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { probeCliInstalled, readJsoncFile } from "../_shared/cliConfig.js";
+import { exec } from "child_process";
+import { promisify } from "util";
 
-const PROVIDER_ID = "9router";
-const DEFAULT_CONTEXT_WINDOW = 128000;
-const DEFAULT_MAX_TOKENS = 16384;
+// Pi's config is JSONC in practice (trailing commas, // comments). JSON.parse
+// rejects both, which silently reset the whole file — including the user's theme
+// and unrelated providers — on every write.
+const parseJsonc = (raw) => {
+  const stripped = raw
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/,\s*([}\]])/g, "$1");
+  return JSON.parse(stripped);
+};
 
-const getAgentModelsPath = () => path.join(os.homedir(), ".pi", "agent", "models.json");
-const getRootModelsPath = () => path.join(os.homedir(), ".pi", "models.json");
-const checkPiInstalled = () => probeCliInstalled("pi", [getAgentModelsPath(), getRootModelsPath()]);
 
-// Prefer the nested path Pi actually reads, fall back to a flat ~/.pi/models.json
-const resolveModelsPath = async () => {
-  for (const candidate of [getAgentModelsPath(), getRootModelsPath()]) {
+const execAsync = promisify(exec);
+
+const getPiModelsJsonPath = () => {
+  const agentPath = path.join(os.homedir(), ".pi", "agent", "models.json");
+  return agentPath;
+};
+
+const getPiDir = () => path.dirname(getPiModelsJsonPath());
+
+const checkPiInstalled = async () => {
+  const isWindows = os.platform() === "win32";
+  try {
+    const command = isWindows ? "where pi" : "which pi";
+    await execAsync(command, { windowsHide: true });
+    return true;
+  } catch {
     try {
-      await fs.access(candidate);
-      return candidate;
-    } catch { /* try next */ }
+      await fs.access(getPiModelsJsonPath());
+      return true;
+    } catch {
+      try {
+        await fs.access(path.join(os.homedir(), ".pi", "models.json"));
+        return true;
+      } catch {
+        return false;
+      }
+    }
   }
-  return getAgentModelsPath();
 };
 
-const readConfigAt = readJsoncFile;
-
-const has9RouterConfig = (config) => {
-  const providers = config?.providers;
-  if (!providers) return false;
-  if (providers[PROVIDER_ID]?.baseUrl) return true;
-  return Object.values(providers).some((provider) => provider?.baseUrl?.includes("20128"));
+const has9RouterConfig = (settings) => {
+  if (!settings || !settings.providers) return false;
+  const p = settings.providers["9router"];
+  if (p && p.baseUrl) return true;
+  for (const prov of Object.values(settings.providers)) {
+    if (prov.baseUrl && prov.baseUrl.includes("20128")) return true;
+  }
+  return false;
 };
 
-const toModelEntry = (entry) => {
-  if (typeof entry === "string") {
-    return { id: entry, name: entry, contextWindow: DEFAULT_CONTEXT_WINDOW, maxTokens: DEFAULT_MAX_TOKENS };
+const resolveModelsJsonPath = async () => {
+  const agentPath = path.join(os.homedir(), ".pi", "agent", "models.json");
+  const rootPath = path.join(os.homedir(), ".pi", "models.json");
+  try {
+    await fs.access(agentPath);
+    return agentPath;
+  } catch {
+    try {
+      await fs.access(rootPath);
+      return rootPath;
+    } catch {
+      return agentPath;
+    }
   }
-  const id = entry?.id || "provider/model-id";
-  return {
-    id,
-    name: entry?.name || id,
-    contextWindow: entry?.contextWindow || DEFAULT_CONTEXT_WINDOW,
-    maxTokens: entry?.maxTokens || DEFAULT_MAX_TOKENS,
-  };
+};
+
+const readConfig = async () => {
+  try {
+    const targetPath = await resolveModelsJsonPath();
+    const content = await fs.readFile(targetPath, "utf-8");
+    return parseJsonc(content);
+  } catch {
+    return null;
+  }
 };
 
 export async function GET() {
   try {
     const installed = await checkPiInstalled();
     if (!installed) {
-      return NextResponse.json({ installed: false, config: null, message: "Pi CLI is not installed" });
+      return NextResponse.json({
+        installed: false,
+        config: null,
+        message: "Pi CLI is not installed",
+      });
     }
 
-    const configPath = await resolveModelsPath();
-    const config = await readConfigAt(configPath);
+    const config = await readConfig();
+    const configPath = await resolveModelsJsonPath();
 
     return NextResponse.json({
       installed: true,
@@ -63,38 +106,64 @@ export async function GET() {
       has9Router: has9RouterConfig(config),
       configPath,
     });
-  } catch (error) {
-    console.log("Error checking pi settings:", error);
-    return NextResponse.json({ error: { message: "Failed to check pi settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function POST(request) {
-  let body;
+  let rawBody;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     return NextResponse.json({ error: { message: "Invalid JSON body" } }, { status: 400 });
   }
 
   try {
-    const { baseUrl, apiKey, model, models } = body || {};
+    const { baseUrl, apiKey, model } = rawBody || {};
     if (!baseUrl) {
       return NextResponse.json({ error: { message: "baseUrl is required" } }, { status: 400 });
     }
 
-    const configPath = await resolveModelsPath();
+    const configPath = await resolveModelsJsonPath();
     await fs.mkdir(path.dirname(configPath), { recursive: true });
 
-    const existing = (await readConfigAt(configPath)) || {};
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = parseJsonc(raw);
+    } catch {
+      /* No existing config */
+    }
+
     if (!existing.providers) existing.providers = {};
 
-    const selected = Array.isArray(models) && models.length > 0 ? models : [model || "provider/model-id"];
-    existing.providers[PROVIDER_ID] = {
-      baseUrl: baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`,
-      apiKey: apiKey || "sk_9router",
-      api: "openai-completions",
-      models: selected.map(toModelEntry),
+    const normalizedBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+    let modelList = [];
+    if (Array.isArray(rawBody.models) && rawBody.models.length > 0) {
+      modelList = rawBody.models.map((m) => {
+        if (typeof m === "string") {
+          return { id: m, name: m, contextWindow: 128000, maxTokens: 16384 };
+        }
+        return {
+          id: m.id || "provider/model-id",
+          name: m.name || m.id || "provider/model-id",
+          contextWindow: m.contextWindow || 128000,
+          maxTokens: m.maxTokens || 16384,
+        };
+      });
+    } else {
+      const modelId = model || "provider/model-id";
+      modelList = [{ id: modelId, name: modelId, contextWindow: 128000, maxTokens: 16384 }];
+    }
+
+    const existingProvider = existing.providers?.["9router"] || {};
+    existing.providers["9router"] = {
+      ...existingProvider,
+      baseUrl: normalizedBaseUrl,
+      apiKey: apiKey || existingProvider.apiKey || await resolveCliApiKey(null),
+      api: existingProvider.api || "openai-completions",
+      models: modelList,
     };
 
     await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
@@ -104,29 +173,30 @@ export async function POST(request) {
       message: "Pi settings applied! Use /model in Pi to select the 9Router model.",
       configPath,
     });
-  } catch (error) {
-    console.log("Error updating pi settings:", error);
-    return NextResponse.json({ error: { message: "Failed to update pi settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function DELETE() {
   try {
-    const configPath = await resolveModelsPath();
-    const existing = await readConfigAt(configPath);
-    if (!existing) {
+    const configPath = await resolveModelsJsonPath();
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = parseJsonc(raw);
+    } catch {
       return NextResponse.json({ success: true, message: "No config file to reset" });
     }
 
-    if (existing.providers?.[PROVIDER_ID]) {
-      delete existing.providers[PROVIDER_ID];
+    if (existing.providers && existing.providers["9router"]) {
+      delete existing.providers["9router"];
       if (Object.keys(existing.providers).length === 0) delete existing.providers;
       await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
     }
 
     return NextResponse.json({ success: true, message: "9Router removed from Pi" });
-  } catch (error) {
-    console.log("Error resetting pi settings:", error);
-    return NextResponse.json({ error: { message: "Failed to reset pi settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }

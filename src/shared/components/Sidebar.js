@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/shared/utils/cn";
@@ -10,7 +11,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import Button from "./Button";
 import { ConfirmModal } from "./Modal";
 import NineRemotePromoModal from "./NineRemotePromoModal";
-import ChangelogModal from "./ChangelogModal";
+const ChangelogModal = dynamic(() => import("./ChangelogModal"), { ssr: false });
 
 // const VISIBLE_MEDIA_KINDS = ["embedding", "image", "imageToText", "tts", "stt", "webSearch", "webFetch", "video", "music"];
 const VISIBLE_MEDIA_KINDS = ["embedding", "image", "video", "tts", "stt"];
@@ -61,12 +62,15 @@ export default function Sidebar({ onClose }) {
       .catch(() => {});
   }, []);
 
-  // Lazy check for new npm version on mount
+  // Lazy check for new npm version in background after initial render
   useEffect(() => {
-    fetch("/api/version")
-      .then(res => res.json())
-      .then(data => { if (data.hasUpdate) setUpdateInfo(data); })
-      .catch(() => {});
+    const timer = setTimeout(() => {
+      fetch("/api/version")
+        .then(res => res.json())
+        .then(data => { if (data.hasUpdate) setUpdateInfo(data); })
+        .catch(() => {});
+    }, 2500);
+    return () => clearTimeout(timer);
   }, []);
 
   const isActive = (href) => {

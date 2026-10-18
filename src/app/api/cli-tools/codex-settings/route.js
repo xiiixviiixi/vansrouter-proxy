@@ -1,11 +1,11 @@
-"use server";
-
 import { NextResponse } from "next/server";
 import { probeCliInstalled } from "../_shared/cliConfig.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { parseTOML, stringifyTOML } from "confbox";
+
+export const dynamic = "force-dynamic";
 
 const getCodexDir = () => path.join(os.homedir(), ".codex");
 const getCodexConfigPath = () => path.join(getCodexDir(), "config.toml");

@@ -26,17 +26,22 @@ import { ROLE, OPENAI_BLOCK, RESPONSES_ITEM, OPENAI_FINISH, MODEL_FALLBACK } fro
 function toResponsesUsage(usage) {
   if (!usage || typeof usage !== "object") return null;
 
-  const inputTokens = [usage.input_tokens, usage.prompt_tokens].find(Number.isFinite) ?? 0;
-  const outputTokens = [usage.output_tokens, usage.completion_tokens].find(Number.isFinite) ?? 0;
+  const inputTokens = [usage.input_tokens, usage.prompt_tokens].find(Number.isInteger);
+  const outputTokens = [usage.output_tokens, usage.completion_tokens].find(Number.isInteger);
+  // Some upstreams attach zeroed placeholders to every chunk. Wait for real counts
+  // so response.completed cannot freeze the placeholder before the usage trailer.
+  if (inputTokens === undefined || outputTokens === undefined || inputTokens + outputTokens <= 0) {
+    return null;
+  }
   const responseUsage = {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
-    total_tokens: Number.isFinite(usage.total_tokens) ? usage.total_tokens : inputTokens + outputTokens
+    total_tokens: inputTokens + outputTokens
   };
-  const cachedTokens = [usage.input_tokens_details?.cached_tokens, usage.prompt_tokens_details?.cached_tokens].find(Number.isFinite);
-  const reasoningTokens = [usage.output_tokens_details?.reasoning_tokens, usage.completion_tokens_details?.reasoning_tokens].find(Number.isFinite);
-  if (Number.isFinite(cachedTokens)) responseUsage.input_tokens_details = { cached_tokens: cachedTokens };
-  if (Number.isFinite(reasoningTokens)) responseUsage.output_tokens_details = { reasoning_tokens: reasoningTokens };
+  const cachedTokens = [usage.input_tokens_details?.cached_tokens, usage.prompt_tokens_details?.cached_tokens].find(Number.isInteger);
+  const reasoningTokens = [usage.output_tokens_details?.reasoning_tokens, usage.completion_tokens_details?.reasoning_tokens].find(Number.isInteger);
+  if (Number.isInteger(cachedTokens)) responseUsage.input_tokens_details = { cached_tokens: cachedTokens };
+  if (Number.isInteger(reasoningTokens)) responseUsage.output_tokens_details = { reasoning_tokens: reasoningTokens };
 
   return responseUsage;
 }
@@ -51,8 +56,14 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
   if (chunk.usage) {
     state.responsesUsage = toResponsesUsage(chunk.usage);
   }
+  // Capture usage before the choices guard: OpenAI may send it in a trailer
+  // whose choices array is empty.
+  const responseUsage = toResponsesUsage(chunk.usage);
+  if (responseUsage) state.responsesUsage = responseUsage;
 
-  if (!chunk.choices?.length) return [];
+  if (!chunk.choices?.length) {
+    return state.completionPending && state.responsesUsage ? flushEvents(state) : [];
+  }
 
   const events = [];
   const nextSeq = () => ++state.seq;
@@ -128,12 +139,16 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     }
 
     if (content) {
+      // The answer starts, so thinking is over. Upstreams that send reasoning via
+      // reasoning_content never emit "</think>", so close it here rather than at finish.
+      closeReasoning(state, emit);
       emitTextContent(state, emit, idx, content);
     }
   }
 
   // Handle tool_calls (empty array is truthy; require a real call)
   if (delta.tool_calls && delta.tool_calls.length) {
+    closeReasoning(state, emit);
     closeMessage(state, emit, idx);
     for (const tc of delta.tool_calls) {
       emitToolCall(state, emit, tc);
@@ -154,6 +169,7 @@ export function openaiToOpenAIResponsesResponse(chunk, state) {
     // and deferring would swallow the terminal event.
     const flushReachesUs = state.targetFormat === FORMATS.OPENAI;
     if (state.responsesUsage || !flushReachesUs) sendCompleted(state, emit);
+    else state.completionPending = true;
   }
 
   return events;
@@ -214,15 +230,19 @@ function closeReasoning(state, emit) {
       part: { type: RESPONSES_ITEM.SUMMARY_TEXT, text: state.reasoningBuf }
     });
 
+    const item = {
+      id: state.reasoningId,
+      type: RESPONSES_ITEM.REASONING,
+      summary: [{ type: RESPONSES_ITEM.SUMMARY_TEXT, text: state.reasoningBuf }]
+    };
+
     emit("response.output_item.done", {
       type: "response.output_item.done",
       output_index: state.reasoningIndex,
-      item: {
-        id: state.reasoningId,
-        type: RESPONSES_ITEM.REASONING,
-        summary: [{ type: RESPONSES_ITEM.SUMMARY_TEXT, text: state.reasoningBuf }]
-      }
+      item
     });
+
+    recordCompletedOutputItem(state, item);
   }
 }
 
@@ -286,16 +306,20 @@ function closeMessage(state, emit, idx) {
       part: { type: RESPONSES_ITEM.OUTPUT_TEXT, annotations: [], logprobs: [], text: fullText }
     });
 
+    const item = {
+      id: msgId,
+      type: RESPONSES_ITEM.MESSAGE,
+      content: [{ type: RESPONSES_ITEM.OUTPUT_TEXT, annotations: [], logprobs: [], text: fullText }],
+      role: ROLE.ASSISTANT
+    };
+
     emit("response.output_item.done", {
       type: "response.output_item.done",
       output_index: parseInt(idx),
-      item: {
-        id: msgId,
-        type: RESPONSES_ITEM.MESSAGE,
-        content: [{ type: RESPONSES_ITEM.OUTPUT_TEXT, annotations: [], logprobs: [], text: fullText }],
-        role: ROLE.ASSISTANT
-      }
+      item
     });
+
+    recordCompletedOutputItem(state, item);
   }
 }
 
@@ -350,21 +374,46 @@ function closeToolCall(state, emit, idx) {
       arguments: args
     });
 
+    const item = {
+      id: `fc_${callId}`,
+      type: RESPONSES_ITEM.FUNCTION_CALL,
+      arguments: args,
+      call_id: callId,
+      name: state.funcNames[idx] || ""
+    };
+
     emit("response.output_item.done", {
       type: "response.output_item.done",
       output_index: parseInt(idx),
-      item: {
-        id: `fc_${callId}`,
-        type: RESPONSES_ITEM.FUNCTION_CALL,
-        arguments: args,
-        call_id: callId,
-        name: state.funcNames[idx] || ""
-      }
+      item
     });
+
+    recordCompletedOutputItem(state, item);
 
     state.funcItemDone[idx] = true;
     state.funcArgsDone[idx] = true;
   }
+}
+
+// response.completed carries the finished Response object, so response.output has
+// to repeat the items already delivered in response.output_item.done. Clients that
+// build their final result from the terminal event (GitHub Copilot CLI, the OpenAI
+// SDK "final response" helpers) otherwise treat the turn as empty even though the
+// text was streamed - see issue #4307.
+//
+// Appended in emission order and deduped by item id: several item kinds share one
+// output_index (reasoning and message both live at choice.index 0), so keying this
+// by output_index dropped whichever closed second.
+function recordCompletedOutputItem(state, item) {
+  state.completedOutputItems ??= [];
+  if (!Array.isArray(state.completedOutputItems)) return;
+  if (!item?.id || state.completedOutputItems.some((entry) => entry?.id === item.id)) return;
+  state.completedOutputItems.push(item);
+}
+
+function collectCompletedOutputItems(state) {
+  const recorded = state.completedOutputItems;
+  return Array.isArray(recorded) ? recorded.slice() : [];
 }
 
 function sendCompleted(state, emit) {
@@ -379,6 +428,7 @@ function sendCompleted(state, emit) {
         status: "completed",
         background: false,
         error: null,
+        output: collectCompletedOutputItems(state),
         ...(state.responsesUsage ? { usage: state.responsesUsage } : {})
       }
     });

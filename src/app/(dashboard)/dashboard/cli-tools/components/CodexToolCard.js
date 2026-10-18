@@ -8,8 +8,10 @@ import BaseUrlSelect from "./BaseUrlSelect";
 import { rememberEndpoint } from "./cliEndpointPresets";
 import ApiKeySelect from "./ApiKeySelect";
 import { matchKnownEndpoint } from "./cliEndpointMatch";
+import { getCurrentCodexProviderSettings } from "./codexConfig";
+import CodexProfilesSection from "./CodexProfilesSection";
 
-function CodexExpandedSection({ activeProviders, apiKeys, applying, checkingCodex, cloudEnabled, codexStatus, customBaseUrl, getDisplayUrl, handleApplySettings, handleResetSettings, message, restoring, selectedApiKey, selectedModel, setCustomBaseUrl, setModalOpen, setSelectedApiKey, setSelectedModel, setShowInstallGuide, setShowManualConfigModal, setSubagentModalOpen, setSubagentModel, showInstallGuide, subagentModel, tailscaleEnabled, tailscaleUrl, tool, tunnelEnabled, tunnelPublicUrl }) {
+function CodexExpandedSection({ activeProviders, apiKeys, applying, checkingCodex, cloudEnabled, codexStatus, customBaseUrl, getDisplayUrl, handleApplySettings, handleResetSettings, message, modelAliases, restoring, selectedApiKey, selectedModel, setCustomBaseUrl, setModalOpen, setSelectedApiKey, setSelectedModel, setShowInstallGuide, setShowManualConfigModal, setSubagentModalOpen, setSubagentModel, showInstallGuide, subagentModel, tailscaleEnabled, tailscaleUrl, tool, tunnelEnabled, tunnelPublicUrl }) {
   return (
         <div className="mt-4 pt-4 border-t border-border flex flex-col gap-4">
           {checkingCodex && (
@@ -65,7 +67,7 @@ function CodexExpandedSection({ activeProviders, apiKeys, applying, checkingCode
                 <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[8rem_auto_1fr] sm:items-center sm:gap-2">
                   <span className="text-xs font-semibold text-text-main sm:text-right sm:text-sm">Select Endpoint</span>
                   <span className="material-symbols-outlined hidden text-text-muted text-[14px] sm:inline">arrow_forward</span>
-                  <BaseUrlSelect currentUrl={codexStatus?.settings?.baseUrl || ""} value={customBaseUrl || getDisplayUrl()} onChange={setCustomBaseUrl} requiresExternalUrl={tool.requiresExternalUrl} tunnelEnabled={tunnelEnabled} tunnelPublicUrl={tunnelPublicUrl} tailscaleEnabled={tailscaleEnabled} tailscaleUrl={tailscaleUrl} />
+                  <BaseUrlSelect currentUrl={getCurrentCodexProviderSettings(codexStatus?.config).baseUrl} value={customBaseUrl || getDisplayUrl()} onChange={setCustomBaseUrl} requiresExternalUrl={tool.requiresExternalUrl} tunnelEnabled={tunnelEnabled} tunnelPublicUrl={tunnelPublicUrl} tailscaleEnabled={tailscaleEnabled} tailscaleUrl={tailscaleUrl} />
                 </div>
 
                 {/* API Key */}
@@ -148,6 +150,8 @@ function CodexExpandedSection({ activeProviders, apiKeys, applying, checkingCode
                   <span className="material-symbols-outlined text-[14px] mr-1">content_copy</span>Manual Config
                 </Button>
               </div>
+
+              <CodexProfilesSection activeProviders={activeProviders} modelAliases={modelAliases} />
             </>
           )}
         </div>
@@ -164,7 +168,7 @@ export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, api
     apiKeys, baseUrl, cloudEnabled, initialStatus, isExpanded, onToggle,
     statusEndpoint: "/api/cli-tools/codex-settings",
     getInitialApiKey: (status, keys) => {
-      const token = status?.auth?.OPENAI_API_KEY;
+      const token = getCurrentCodexProviderSettings(status?.config).apiKey || status?.auth?.OPENAI_API_KEY;
       return token && keys?.some((key) => key.key === token) ? token : keys?.[0]?.key || "";
     },
   });
@@ -188,8 +192,7 @@ export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, api
   const getConfigStatus = () => {
     if (!codexStatus?.installed) return null;
     if (!codexStatus.config) return "not_configured";
-    const parsed = codexStatus.config.match(/base_url\s*=\s*"([^"]+)"/);
-    const currentUrl = parsed ? parsed[1] : "";
+    const currentUrl = getCurrentCodexProviderSettings(codexStatus.config).baseUrl;
     return matchKnownEndpoint(currentUrl, { tunnelPublicUrl, tailscaleUrl }) ? "configured" : "other";
   };
 
@@ -314,6 +317,7 @@ default_subagent_model = "${effectiveSubagentModel}"
         customBaseUrl={customBaseUrl}
         getDisplayUrl={getDisplayUrl}
         handleApplySettings={handleApplySettings}
+        modelAliases={modelAliases}
         handleResetSettings={handleResetSettings}
         message={message}
         restoring={restoring}

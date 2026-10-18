@@ -26,9 +26,9 @@ export default {
   models: [
     { id: "kilo-auto/frontier", name: "Kilo Auto Frontier" },
     { id: "kilo-auto/balanced", name: "Kilo Auto Balanced" },
-    { id: "kilo-auto/free", name: "Kilo Auto Free" },
-    { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B (Free)" },
-    { id: "minimax/minimax-m2.5:free", name: "MiniMax M2.5 (Free)" },
-    { id: "arcee-ai/trinity-large-preview:free", name: "Trinity Large Preview (Free)" },
+    { id: "kilo-auto/free", name: "Kilo Auto Free", hasFree: true },
+    { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "Nemotron 3 Super 120B (Free)", hasFree: true },
+    { id: "minimax/minimax-m2.5:free", name: "MiniMax M2.5 (Free)", hasFree: true },
+    { id: "arcee-ai/trinity-large-preview:free", name: "Trinity Large Preview (Free)", hasFree: true },
   ],
 };

@@ -18,6 +18,8 @@ export default {
     },
   },
   category: "freeTier",
+  hasFree: true,
+  freeRefresh: "one-time",
   transport: {
     baseUrl: "https://ark.ap-southeast.bytepluses.com/api/coding/v3/chat/completions",
     headers: {},

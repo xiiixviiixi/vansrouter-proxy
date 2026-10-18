@@ -39,6 +39,7 @@ import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
 import { errorResponse, unavailableResponse, withSelectedConnectionHeader } from "open-sse/utils/error.js";
+import { upstreamResponseHeaders } from "open-sse/utils/upstreamHeaders.js";
 import { handleComboChat, handleFusionChat } from "open-sse/services/combo.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
@@ -265,13 +266,27 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     return errorResponse(HTTP_STATUS.FORBIDDEN, `Provider "${provider}" is not allowed for this API key`);
   }
 
-  // ACL: check if model is in available models list
+  // ACL: check if model is in available models list.
+  // A registry id can already carry its org prefix (nvidia/nvidia/nemotron-…),
+  // while the allowlist built by buildConnectedProviderIds strips one prefix
+  // (nvidia/nemotron-…). Probe both forms, like embeddings.js does.
   const resolvedModelStr = `${provider}/${model}`;
-  const isAllowed = (modelStr === resolvedModelStr)
-    ? await isModelAllowed(resolvedModelStr, apiKeyInfo)
-    : (await isModelAllowed(modelStr, apiKeyInfo) || await isModelAllowed(resolvedModelStr, apiKeyInfo));
-  if (!isAllowed) {
-    log.warn("CHAT", `Model not in available models list`, { model: resolvedModelStr });
+  const candidates = [resolvedModelStr];
+  if (model.startsWith(`${provider}/`)) {
+    candidates.push(`${provider}/${model.slice(provider.length + 1)}`);
+  }
+  if (modelStr !== resolvedModelStr && !candidates.includes(modelStr)) {
+    candidates.push(modelStr);
+  }
+  let allowedModelStr = null;
+  for (const c of candidates) {
+    if (await isModelAllowed(c, apiKeyInfo)) {
+      allowedModelStr = c;
+      break;
+    }
+  }
+  if (!allowedModelStr) {
+    log.warn("CHAT", `Model not in available models list`, { model: resolvedModelStr, candidates });
     return errorResponse(HTTP_STATUS.NOT_FOUND, `Model "${resolvedModelStr}" is not available. Only models listed in /v1/models can be used.`);
   }
 
@@ -336,6 +351,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   // ponytail: max 6 fallback attempts per request; return 429/503 early if accounts exhausted.
   const MAX_FALLBACK_ATTEMPTS = Math.max(providerAccountCount > 0 ? Math.min(providerAccountCount, 6) : 6, 1);
   let fallbackAttempts = 0;
+  let lastHeaders = null;
 
   while (true) {
     if (fallbackAttempts >= MAX_FALLBACK_ATTEMPTS) {
@@ -382,9 +398,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         }
         const errorMsg = lastError || credentials.lastError || "Unavailable";
         const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
-        log.warn("CHAT", `[${provider}/${model}] ${errorMsg} (${credentials.retryAfterHuman})`);
+          log.warn("CHAT", `[${provider}/${model}] ${errorMsg} (${credentials.retryAfterHuman})`);
         return withSelectedConnectionHeader(
-          unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman),
+          unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman, lastHeaders),
           credentials?.connectionId ?? null
         );
       }
@@ -397,7 +413,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
       log.warn("CHAT", "No more accounts available", { provider });
       return withSelectedConnectionHeader(
-        errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable"),
+        errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable", lastHeaders),
         lastExcludedConnectionId
       );
     }
@@ -594,6 +610,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       excludeConnectionIds.add(credentials.connectionId);
       lastError = errorText;
       lastStatus = result.status;
+      lastHeaders = upstreamResponseHeaders(result.response?.headers);
       continue;
     }
 

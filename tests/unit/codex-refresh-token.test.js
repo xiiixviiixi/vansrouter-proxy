@@ -147,8 +147,9 @@ describe("Codex Refresh Token", () => {
     it("should return provider-specific lead time for OAuth providers", async () => {
       const { getRefreshLeadMs } = await import("../../open-sse/services/tokenRefresh.js");
 
-      // Synced with CLIProxyAPI refresh_registry
-      expect(getRefreshLeadMs("codex")).toBe(5 * 24 * 60 * 60 * 1000);   // 5 days
+      // Synced with CLIProxyAPI refresh_registry; codex is 10min since 0bc7f86e
+      // (a 5-day lead rotated the refresh token on every call → account logout).
+      expect(getRefreshLeadMs("codex")).toBe(10 * 60 * 1000);            // 10 minutes
       expect(getRefreshLeadMs("claude")).toBe(4 * 60 * 60 * 1000);       // 4 hours
       expect(getRefreshLeadMs("iflow")).toBe(24 * 60 * 60 * 1000);       // 24 hours
       expect(getRefreshLeadMs("qwen")).toBe(20 * 60 * 1000);             // 20 minutes

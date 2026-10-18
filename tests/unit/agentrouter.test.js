@@ -42,7 +42,7 @@ describe("agentrouter registry entry", () => {
     const executor = getExecutor("agentrouter");
     const headers = executor.buildHeaders({ apiKey: "sk-agentrouter" }, true);
     // AgentRouter validates these to ensure the request comes from a Claude CLI/compatible client.
-    expect(headers["User-Agent"]).toBe("claude-cli/2.1.195 (external, sdk-cli)");
+    expect(headers["User-Agent"]).toBe("claude-cli/2.1.280 (external, sdk-cli)");
     expect(headers["x-app"]).toBe("cli");
     expect(headers["anthropic-dangerous-direct-browser-access"]).toBe("true");
     expect(headers["anthropic-beta"]).toContain("claude-code-20250219");

@@ -17,6 +17,7 @@ export default {
     },
   },
   category: "freeTier",
+  hasFree: true,
   authType: "apikey",
   authModes: ["apikey"],
   transport: {

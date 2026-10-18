@@ -4,6 +4,113 @@ import { FORMATS } from "../formats.js";
 // Anthropic tool_use.id must match: ^[a-zA-Z0-9_-]+$
 const TOOL_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
+// Anthropic allows 128 (^[a-zA-Z0-9_-]{1,128}$), but Gemini, Kiro, OpenAI and
+// MCP all cap at 64 — so a client may send a name a legal Claude request rejects.
+export const TOOL_NAME_MAX_LENGTH = 64;
+
+// Never plain slice(0, n): two MCP tools sharing a prefix would collapse into one
+// and the model would silently call the wrong tool. Same numeric-suffix scheme
+// kiroConversation.uniqueName() already uses, so a retry keeps the same name and
+// prompt caching still hits.
+export function fitToolName(name, maxLength = TOOL_NAME_MAX_LENGTH, taken = new Set()) {
+  if (typeof name !== "string" || !name) return name;
+  if (name.length <= maxLength) return name;
+
+  let suffix = 1;
+  let candidate = name;
+  do {
+    const tail = `_${suffix++}`;
+    candidate = `${name.slice(0, maxLength - tail.length)}${tail}`;
+  } while (taken.has(candidate));
+  return candidate;
+}
+
+// Fit tool names exceeding maxLength (default 64) and record reverse mapping.
+// Updates body.tools, body.tool_choice, and body.messages / body.input history.
+// Attaches or merges `_toolNameMap` (Map: fittedName -> originalName) on `body`.
+export function ensureFittedToolNames(body, maxLength = TOOL_NAME_MAX_LENGTH) {
+  if (!body || typeof body !== "object") return body;
+  const tools = body.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return body;
+
+  const toolNameMap = new Map();
+  const fittedNames = new Map();
+  const taken = new Set();
+
+  for (const tool of tools) {
+    const raw = tool?.function?.name || tool?.name;
+    if (typeof raw === "string" && raw.length <= maxLength) {
+      taken.add(raw);
+    }
+  }
+
+  for (const tool of tools) {
+    const isChat = !!tool?.function;
+    const raw = isChat ? tool.function?.name : tool?.name;
+    if (typeof raw !== "string" || !raw) continue;
+
+    if (raw.length > maxLength) {
+      const fitted = fitToolName(raw, maxLength, taken);
+      taken.add(fitted);
+      toolNameMap.set(fitted, raw);
+      fittedNames.set(raw, fitted);
+      if (isChat) {
+        tool.function.name = fitted;
+      } else {
+        tool.name = fitted;
+      }
+    }
+  }
+
+  if (fittedNames.size === 0) return body;
+
+  if (body.tool_choice && typeof body.tool_choice === "object") {
+    if (body.tool_choice.function?.name && fittedNames.has(body.tool_choice.function.name)) {
+      body.tool_choice.function.name = fittedNames.get(body.tool_choice.function.name);
+    }
+    if (body.tool_choice.name && fittedNames.has(body.tool_choice.name)) {
+      body.tool_choice.name = fittedNames.get(body.tool_choice.name);
+    }
+  }
+
+  if (Array.isArray(body.messages)) {
+    for (const msg of body.messages) {
+      if (Array.isArray(msg?.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+          if (tc?.function?.name && fittedNames.has(tc.function.name)) {
+            tc.function.name = fittedNames.get(tc.function.name);
+          }
+        }
+      }
+      if (Array.isArray(msg?.content)) {
+        for (const block of msg.content) {
+          if (block?.type === "tool_use" && block.name && fittedNames.has(block.name)) {
+            block.name = fittedNames.get(block.name);
+          }
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (item?.type === "function_call" && item.name && fittedNames.has(item.name)) {
+        item.name = fittedNames.get(item.name);
+      }
+    }
+  }
+
+  if (!body._toolNameMap) {
+    body._toolNameMap = toolNameMap;
+  } else {
+    for (const [k, v] of toolNameMap) {
+      body._toolNameMap.set(k, v);
+    }
+  }
+
+  return body;
+}
+
 // Fallback streaming tool_call id when provider omits one (index optional)
 export function fallbackToolCallId(index) {
   return index === undefined ? `call_${Date.now()}` : `call_${index}_${Date.now()}`;

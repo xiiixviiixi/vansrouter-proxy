@@ -4,11 +4,34 @@ import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 const DEFAULT_MAX_RECORDS = 200;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
+// maxJsonSize is expressed in BYTES here (KB setting * 1024). See resolveMaxJsonSize().
 const DEFAULT_MAX_JSON_SIZE = 5 * 1024;
+// Allowed band for the KB setting. Anything outside [MIN, MAX] is treated as a bad
+// value and falls back to DEFAULT_MAX_JSON_SIZE (5 KB), NOT clamped to the ceiling.
+// Clamping up is what let the garbage stored value 1024 keep 64 KB rows.
+const MAX_JSON_SIZE_KB = 64;
+const MIN_JSON_SIZE_KB = 1;
+// Absolute ceiling enforced in truncateField, independent of any setting/env value.
+const HARD_MAX_JSON_SIZE = MAX_JSON_SIZE_KB * 1024;
 const CONFIG_CACHE_TTL_MS = 5000;
 
 let cachedConfig = null;
 let cachedConfigTs = 0;
+
+// observabilityMaxJsonSize / OBSERVABILITY_MAX_JSON_SIZE are KB. Accepted range is
+// [MIN_JSON_SIZE_KB, MAX_JSON_SIZE_KB] (1–64 KB). A value outside that range (e.g. the
+// stored 1024) or a non-numeric value falls back to the 5 KB default. Sane values are
+// honoured as-is: 32 → 32 KB. Returns bytes.
+export function resolveMaxJsonSize(settings = {}, env = process.env) {
+  const rawSetting = Number(settings.observabilityMaxJsonSize);
+  const parsed = Number.isFinite(rawSetting)
+    ? rawSetting
+    : parseInt(env.OBSERVABILITY_MAX_JSON_SIZE || "", 10);
+  if (!Number.isFinite(parsed) || parsed < MIN_JSON_SIZE_KB || parsed > MAX_JSON_SIZE_KB) {
+    return DEFAULT_MAX_JSON_SIZE;
+  }
+  return parsed * 1024;
+}
 
 async function getObservabilityConfig() {
   if (cachedConfig && (Date.now() - cachedConfigTs) < CONFIG_CACHE_TTL_MS) return cachedConfig;
@@ -24,7 +47,7 @@ async function getObservabilityConfig() {
       maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
       batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
       flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || String(DEFAULT_FLUSH_INTERVAL_MS), 10),
-      maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
+      maxJsonSize: resolveMaxJsonSize(settings),
     };
   } catch {
     cachedConfig = {
@@ -60,10 +83,17 @@ function generateDetailId(model) {
   return `${timestamp}-${random}-${modelPart}`;
 }
 
-function truncateField(obj, maxSize) {
+// maxSize is BYTES. The HARD_MAX_JSON_SIZE clamp is a second line of defence so
+// this function cannot store an unbounded payload even if a caller miscomputes maxSize.
+export function truncateField(obj, maxSize) {
+  const cap = Math.min(
+    Number.isFinite(maxSize) && maxSize > 0 ? maxSize : DEFAULT_MAX_JSON_SIZE,
+    HARD_MAX_JSON_SIZE
+  );
   const str = JSON.stringify(obj || {});
-  if (str.length > maxSize) {
-    return { _truncated: true, _originalSize: str.length, _preview: str.substring(0, 200) };
+  const bytes = Buffer.byteLength(str, "utf8");
+  if (bytes > cap) {
+    return { _truncated: true, _originalSize: bytes, _preview: str.substring(0, 200) };
   }
   return obj || {};
 }

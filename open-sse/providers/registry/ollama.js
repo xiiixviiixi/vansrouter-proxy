@@ -2,6 +2,7 @@ export default {
   id: "ollama",
   priority: 30,
   hasFree: true,
+  freeRefresh: "monthly",
   alias: "ollama",
   display: {
     name: "Ollama Cloud",

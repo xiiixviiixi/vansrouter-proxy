@@ -2,10 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { marked } from "marked";
 import { GITHUB_CONFIG } from "@/shared/constants/config";
-
-marked.setOptions({ gfm: true, breaks: true });
 
 function sanitizeHtml(html) {
   if (typeof window === "undefined") return "";
@@ -27,7 +24,11 @@ export default function ChangelogModal({ isOpen, onClose }) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.text();
       })
-      .then((md) => setFetchState(prev => ({ ...prev, html: sanitizeHtml(marked.parse(md)), loading: false })))
+      .then((md) => import("marked").then(({ marked }) => ({ md, marked })))
+      .then(({ md, marked }) => {
+        marked.setOptions({ gfm: true, breaks: true });
+        setFetchState(prev => ({ ...prev, html: sanitizeHtml(marked.parse(md)), loading: false }));
+      })
       .catch((err) => setFetchState(prev => ({ ...prev, error: err.message || "Failed to load", loading: false })));
   }, [isOpen]);
 

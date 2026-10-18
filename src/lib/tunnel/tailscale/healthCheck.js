@@ -18,13 +18,13 @@ export async function probeUrlAlive(url) {
   }
 }
 
-export async function waitForHealth(url, cancelToken = { cancelled: false }) {
-  const deadline = Date.now() + HEALTH_CHECK.timeoutMs;
+export async function waitForHealth(url, cancelToken = { cancelled: false }, { timeoutMs = HEALTH_CHECK.timeoutMs } = {}) {
+  const deadline = Date.now() + timeoutMs;
 
   async function poll() {
     if (cancelToken.cancelled) throw new Error("cancelled");
     if (await probeUrlAlive(url)) return true;
-    if (Date.now() >= deadline) throw new Error(`Health check timeout after ${HEALTH_CHECK.timeoutMs}ms`);
+    if (Date.now() >= deadline) throw new Error(`Health check timeout after ${timeoutMs}ms`);
     await new Promise((r) => setTimeout(r, HEALTH_CHECK.intervalMs));
     return poll();
   }

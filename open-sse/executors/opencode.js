@@ -203,7 +203,7 @@ export class OpenCodeExecutor extends BaseExecutor {
       || `${this.origin}/zen/v1${LANE_PATH[lane]}`;
   }
 
-  buildHeaders(credentials, stream = true, model) {
+  buildHeaders(credentials, stream = true, url, model) {
     const raw = Object.fromEntries(Object.entries(credentials?.rawHeaders || {}).map(([k, v]) => [k.toLowerCase(), v]));
     const rawSession = raw["x-opencode-session"];
     const storedSession = credentials?.runtimeOpencodeSession;
@@ -226,8 +226,14 @@ export class OpenCodeExecutor extends BaseExecutor {
       "Accept": stream ? "text/event-stream" : "*/*"
     };
     // Per-transport contract when chatCore picked one (zen claude: x-api-key raw
-    // + version; else Bearer); the free lane carries no key → "Bearer public".
-    applyAuth(headers, credentials?.runtimeTransport?.auth || BEARER_AUTH, credentials || {});
+    // + version; else Bearer). A keyless request falls back to "public" on every
+    // lane this executor serves — restricting it to the free lane let the keyed
+    // zen lane send "Bearer undefined", which the upstream reads as no credential.
+    const authCredentials = { ...(credentials || {}) };
+    if (!authCredentials.apiKey && !authCredentials.accessToken) {
+      authCredentials.apiKey = "public";
+    }
+    applyAuth(headers, credentials?.runtimeTransport?.auth || BEARER_AUTH, authCredentials);
     if (this.laneFor(model, credentials) === "claude" && !headers["anthropic-version"]) {
       headers["anthropic-version"] = ANTHROPIC_API_VERSION;
     }
@@ -237,12 +243,28 @@ export class OpenCodeExecutor extends BaseExecutor {
   parseError(response, bodyText) {
     const status = response?.status || 0;
     const text = String(bodyText || "");
-    if (this.provider === "opencode" && (status === 429 || status === 403) && IP_LIMIT_BODY.test(text)) {
-      return {
-        status,
-        message: text.slice(0, 300) || `OpenCode free limit (${status})`,
-        poolScoped: { reason: "ip-limit" },
-      };
+    if (this.provider === "opencode") {
+      if ((status === 429 || status === 403) && IP_LIMIT_BODY.test(text)) {
+        return {
+          status,
+          message: text.slice(0, 300) || `OpenCode free limit (${status})`,
+          poolScoped: { reason: "ip-limit" },
+        };
+      }
+      if (status === 401 && /Model .* is not supported/i.test(text)) {
+        return {
+          status: 404,
+          message: text.slice(0, 300),
+          code: "model_not_found",
+        };
+      }
+      if (status === 400 && /Model is unavailable/i.test(text)) {
+        return {
+          status: 503,
+          message: text.slice(0, 300),
+          code: "model_unavailable",
+        };
+      }
     }
     return null;
   }

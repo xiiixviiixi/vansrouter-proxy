@@ -18,13 +18,20 @@ docker run -d \
   -v 9router-data:/app/data \
   -v vansrouter-data:/migration-data:ro \
   -e DATA_DIR=/app/data \
+  -e INITIAL_PASSWORD="$(openssl rand -base64 24)" \
   --name vansrouter \
-  ghcr.io/vanszs/vansrouter:latest
+  ghcr.io/vanszs/vansrouter:X.Y.Z
 ```
+
+Save the generated `INITIAL_PASSWORD` securely. If omitted, a new installation uses the compatibility default `123456`; change it before public exposure. Open `http://localhost:20128/masuk` to log in.
+
+A login with the compatibility default `123456` that does not come from this machine is never given a dashboard session. It receives a short-lived, password-change-only grant instead, so the browser is asked for a strong replacement password (12+ characters) before anything else loads. This also means anyone who can reach the port before you have set a password could take the account over — set `INITIAL_PASSWORD` (or change the password immediately) on any install reachable from another machine.
+
+Replace `X.Y.Z` with the exact published release tag; do not run the placeholder or `latest`.
 
 The `vansrouter-data` mount is read-only compatibility input for pre-v0.91.22 named-volume installs. It is copied automatically into the canonical `9router-data` volume only when that volume has no database. If the old install used `$HOME/.9router:/app/data`, keep using that bind mount or migrate its contents into `9router-data` first.
 
-App listens on port `20128`. Open: http://localhost:20128
+App listens on port `20128`. Open: http://localhost:20128/masuk
 
 ## Manage container
 
@@ -91,7 +98,10 @@ Use the provided `docker-compose.yml`:
 ```bash
 # Copy and customize environment
 cp .env.example .env
-nano .env
+nano .env  # set VANSROUTER_VERSION and INITIAL_PASSWORD
+
+# Validate legacy image/data-root assumptions before changing containers
+pnpm preflight:upgrade -- --env-file .env --compose-file docker-compose.yml
 
 # Start both services
 docker compose up -d
@@ -104,7 +114,7 @@ Create your own `docker-compose.yml`:
 ```yaml
 services:
   vansrouter:
-    image: ghcr.io/vanszs/vansrouter:latest
+    image: ghcr.io/vanszs/vansrouter:X.Y.Z
     container_name: vansrouter
     restart: always
     ports:
@@ -123,7 +133,7 @@ services:
       - headroom
 
   headroom:
-    image: ghcr.io/chopratejas/headroom:latest
+    image: ghcr.io/chopratejas/headroom@sha256:50b85d8e320cfcdf1b38919bb7ae067b93ff7a8de0a93f05b2c1246370200d1c
     container_name: headroom
     restart: always
     ports:
@@ -144,14 +154,22 @@ If Headroom runs on the Docker host instead of as a sidecar, use `http://host.do
 
 ## Update without manual asset or database steps
 
-`9router-data` is the canonical volume. The compose file also mounts historical `vansrouter-data` read-only for automatic compatibility copying. The entrypoint copies the complete legacy data tree only when `/app/data/db/data.sqlite` does not exist and records `.legacy-volume-migrated`; it never overwrites an existing canonical file. Legacy installs that used a host bind mount (`$HOME/.9router:/app/data`) must keep that bind mount or copy its contents into `9router-data` before switching to named volumes.
+`9router-data` is the canonical volume. The compose file also mounts historical `vansrouter-data` read-only for automatic compatibility copying. The entrypoint stages and validates the legacy SQLite database before atomically installing it; a valid canonical database is preserved, while an invalid interrupted copy is replaced only from a validated migration source. The `.legacy-volume-migrated` marker is written last. Legacy installs that used a host bind mount (`$HOME/.9router:/app/data`) must keep that bind mount or copy its contents into `9router-data` before switching to named volumes.
 
 ```bash
+pnpm preflight:upgrade -- --env-file .env --compose-file docker-compose.yml
 docker compose pull vansrouter
 docker compose up -d --no-deps vansrouter
 ```
 
-For a pinned release, replace `latest` in the compose file with `X.Y.Z` before pulling. Do not copy `.next`, delete either volume, or run application migrations manually. After a successful upgrade, remove the `vansrouter-data:/migration-data:ro` mount only after confirming the new container reports the expected version and data.
+For Compose, set `VANSROUTER_VERSION` in `.env` to an immutable SemVer release tag (never `latest`; prefer the recorded digest) before pulling. Do not copy `.next`, delete either volume, or run application migrations manually. After a successful upgrade, remove the `vansrouter-data:/migration-data:ro` mount only after confirming the new container reports the expected version and data.
+
+For a PM2 deployment that already uses `/var/lib/9router`, export the same `DATA_DIR` in the deploy shell and run the preflight with PM2 inspection before deploying:
+
+```bash
+DATA_DIR=/var/lib/9router node scripts/preflight-upgrade.cjs \
+  --env-file .env --compose-file docker-compose.yml --pm2
+```
 
 ---
 

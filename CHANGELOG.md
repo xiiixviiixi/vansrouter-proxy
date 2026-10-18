@@ -1,3 +1,254 @@
+# v0.91.61 (2026-10-02)
+
+128 commits over the v0.91.51 tag: an upstream sync to decolua/9router v0.5.95
+cherry-picked commit by commit onto this fork, adding three OAuth-capable
+providers and GPT-6.1-era model support, followed by a repair pass over the
+conflicts the cherry-picks left behind, a merge of upstream's grok-cli 426-gate
+fix that landed on `main` mid-release, and a measured performance pass over the
+dashboard. 271 files, +16094/-1420.
+
+## Features
+
+- **Codex**: GPT-6.1 Sol with its own 272k capability entry, 1M-context variants
+  for GPT-6 and GPT-5.6, and a refreshed CLI identity (0.154.0 → 0.159.0) so
+  OpenAI stops rejecting it on connected ChatGPT accounts; the responses-lite
+  transport accepts the full low..max effort ladder.
+- **Claude**: Sonnet 5.5 added to the registry and capabilities, resolving
+  Sonnet 5.x to adaptive thinking; the spoofed CLI version moves to 2.1.280 and
+  Kiro adds the claude-opus-5.5 models.
+- **Muse**: new Meta Muse provider with OAuth login, model catalog, and pricing.
+- **v1m**: new v1m System One provider, wired end to end (registry, models,
+  OAuth modal).
+- **GLM**: Z.ai OAuth login for GLM Coding as a dual-auth path while keeping the
+  fork's ZCode keychain flow.
+- **CLI**: new `connect` command pairs the CLI with a remote 9router server and
+  installs its tools (`cli/src/cli/commands/connect.js`, `connectTools.js`).
+- **Providers**: per-provider custom header overrides editable from the dashboard
+  (`CustomConfigCard`, `/api/providers/[id]/overrides`).
+- **Agnes**: 2.5/3.0 model ids seeded in the registry.
+- **Capabilities**: publish real GPT-6/GPT-5.4+ context windows and combo token
+  limits; the stale `*gpt-5*` pattern no longer shadows GPT-5.4+ and the dead
+  gpt-5.6-luna entry is dropped.
+- **Usage**: the `?provider=` URL param syncs with the provider filter for
+  bookmarkable deep links (#4395).
+- **Hive**: new Hive AI provider (aliases `hive`, `hive-ai`), self-hosted
+  OpenAI-compatible LLMs that rewrite short ids to full upstream names, plus a
+  generic connection-probe fix.
+- **Aggregators**: four OpenAI-compatible aggregator providers (agnes, atria,
+  bai, dahl) with catalogue validation and golden url/header snapshots.
+- **TinyFish**: new search-and-fetch provider, with the fork's SSRF guard
+  restored on the search path.
+- **Gemini STT**: live-API-only Gemini models dispatch over the Live WebSocket
+  transport instead of being rejected as unsupported (#4006).
+- **CLI tools**: the Codex card manages `~/.codex/<alias>.config.toml` model
+  profiles; Hermes gains multi-role model config (delegation + auxiliary slots)
+  via `/api/cli-tools/hermes-settings`.
+- **Free tiers**: catalogue grouped by provider with refresh cadence, surfaced on
+  the usage page, plus show/redeem free-limit resets for Claude accounts.
+- **Claude translator**: thinking text is returned to OpenAI-format clients;
+  `x-claude-code-session-id` is forwarded on OAuth requests; client
+  `anthropic-beta` flags merge into the pinned per-provider set and upstream
+  retry/rate-limit headers forward to the client.
+- **opencode-go**: complete 40-model Go catalog with auto-fetch and
+  family-endpoint regex, plus the seven models upstream serves but the registry
+  omitted (#4357).
+- **Dashboard performance**: the three recharts usage charts are gated behind an
+  IntersectionObserver so `recharts` and `@xyflow/react` (~721 KB) stay off the
+  `/dashboard/usage` initial request graph and load only when scrolled into view;
+  the eager idle preload that defeated the gate is removed, dynamic imports carry
+  sized skeletons, and `requestDetails` rows are bounded by a UTF-8 byte cap
+  (bad stored values fall back to 5 KB instead of clamping up to 64 KB).
+
+## Fixes
+
+- **Codex**: stop refresh-token reuse on auto-ping that logged accounts out;
+  preserve hosted web search on GPT-6 Sol/Luna; remove ghost models, add
+  gpt-daybreak/reserve, and route gpt-5.x/6.x bare slugs to codex (#4418).
+- **CLI tools**: `resolveApiKey` writes the first active dashboard API key
+  instead of the `sk_9router` placeholder (#4399); Codex settings apply
+  refreshes the status it just wrote; the omp provider regex stops at sibling
+  indentation; Pi config parses as JSONC; the VansRoute provider key is written
+  with legacy migration; an expired Cursor JWT is rejected in the connection
+  test.
+- **Responses**: wait for real usage before emitting `response.completed` and
+  bound the deferred completion wait with a 3s watchdog; `response.completed`
+  carries every streamed output item, emission-ordered and deduped by item id
+  (#4307).
+- **Claude**: keep a trailing user turn so cleanup never yields assistant
+  prefill; preserve intentional prefill from non-messages[] source formats; cache
+  a tool loop's final tool results at a 4th cache breakpoint; keep user turns
+  whose only block is `container_upload`.
+- **Gemini/Antigravity**: strip non-standard tool-schema keywords (`errorMessage`,
+  `x-errorMessage`, `x-taplo`, `min/maxProperties`, ...) that upstream rejects
+  with HTTP 400; guard terminal model turns and unresponded function calls in
+  `normalizeGeminiContents`.
+- **DeepSeek**: dedupe same-name tools for DeepSeek models (#3333).
+- **Thinking**: `xhigh` added to claude-adaptive thinking levels; Kiro effort
+  tiers clamp xhigh to high on 4.6 models (which reject it) while accepting max;
+  opencode-go clamps deepseek `reasoning_effort: "max"` to `"high"` for mimo
+  backends.
+- **Capabilities**: stop caching the catalog source per module copy (#4351);
+  dedupe duplicated registry imports and array entries and refresh the catalog
+  invariant.
+- **grok-cli**: pinned client version moved to 1.0.44 so the proxy stops
+  returning HTTP 426, overridable with `GROK_CLI_VERSION` (#153).
+- **Proxy**: auto-fallback to insecure TLS on self-signed certificate errors;
+  hold strictProxy when no proxy resolves.
+- **CodeBuddy**: parse the 6004 rate-limit error and extract `resetsAtMs`;
+  forward `recurring` for codebuddy-intl quota packs (#4422).
+- **Usage**: key live byApiKey stats by the full API key to prevent team-key
+  collision, preserving API-key attribution on both the live path and the
+  overlay.
+- **Dashboard**: exclude hidden providers from the usage-stats provider list;
+  `ModelSelectModal` satisfies react-hooks/set-state-in-effect; the request-details
+  drawer shows an explicit "Payload truncated" notice (with original size) instead
+  of rendering the truncation marker as if it were the payload.
+- **commandcode**: replay raw byte chunks so no NDJSON line is split.
+- **Providers**: `POST /api/providers` is O(1) in pool size for the
+  MAX(priority)+1 path while explicit-priority callers still reindex the pool
+  (#4311); deepseek-v4-1-flash vision alias; zed added to live-catalog
+  providers; the CLI model selector takes aliases from `/api/providers` and
+  filters by active connections.
+- **Tailscale**: cap enable-flow health wait at 20s.
+- **Antigravity**: rewrite all Hermes identity variants, not just the legacy
+  sentence; stop emitting empty `<think>` markers into OpenAI content; decloak
+  tool names when toolNameMap misses, with a suffix-stripping fallback (#4342).
+
+## Reliability & Compatibility
+
+- **Grok CLI upstream merge (#153)**: merged upstream's
+  `fix(grok-cli): bump advertised client version past the 426 upgrade gate`.
+  Our implementation already pins `1.0.44` (superseding the upstream `1.0.13`
+  default) and keeps the `GROK_CLI_VERSION` env override, so every conflict
+  resolved in our favour; no stale `0.2.93`/`0.2.99` fingerprint survives.
+  Adopted upstream's documented `GROK_CLI_VERSION` row in `README.md`.
+- **Cherry-pick repair pass**: the v0.5.95 conflict resolutions re-introduced a
+  duplicate `buildModelsList`/`capabilitiesFromServiceKind` in
+  `src/app/api/v1/models/route.js` that broke the build; restored the 97-line
+  route and ported upstream's combo-limit publishing (UI-alias → provider-id
+  seat resolution, nested-combo window expansion) into
+  `src/sse/services/allowedModels.js`, leaving exactly one
+  `aggregateComboCapabilities` in `open-sse/services/combo.js`.
+- **Executor header contract**: the `buildHeaders(credentials, stream, url,
+  model, body)` slot contract was completed across executors — default,
+  opencode, and opencode-go now read the model from slot 4 and the body from
+  slot 5, matching `codex.js` and `base.execute()`.
+- **Codex responses-lite**: ported the missing half of the transport
+  (`stripStoredItemReferences` with lite-prefix preservation, the low-effort
+  clamp, the `additional_tools` input prefix, `reasoning.context: "all_turns"`);
+  `thinkingLevels` honours a codex registry override before the glob so Sol/Luna
+  keep low..max while gpt-6-astra keeps the full ladder.
+- **Conflict-marker cleanup**: three follow-up rounds removed markers left in
+  `claude.js`, capabilities, v1/models, the cli connect pick, and cli-tools
+  files; `claude.js` regained upstream's assistant-anchor loop for
+  `anchorClaudeCache`.
+- **Tests**: 13 tests broken by the resolutions repaired; golden url/header
+  snapshots regenerated and the app's own version masked
+  (`VansRouter/<version>` → `VansRouter/<VER>`) so release bumps no longer churn
+  them, while pinned upstream CLI versions stay guarded.
+- **Frontend**: usage charts and `marked` lazy-loaded, keeping recharts out of
+  dashboard initial bundles; the Hermes card uses the official Nous Research
+  logo.
+
+## Verification
+
+- `pnpm run build` → exit 0 ("build complete"; 0 "Attempted import error")
+- `npx eslint . --quiet --no-warn-ignored` → exit 0
+- `node scripts/lint-undef.cjs` → exit 0 ("no-undef lint: clean")
+- `pnpm test` → exit 0: 4148 passed | 121 skipped | 1 todo (4270), zero
+  failures, across 408 test files (390 passed / 18 skipped)
+
+## Known gaps (not claimed as verified)
+
+- `hive/zai-org/glm-5.3-flash` streams tool calls **without** `arguments`
+  (`function.name` only, then `finish_reason: "tool_calls"`, `completion_tokens: 1`).
+  Reproduced live through the proxy; the same route keeps arguments for
+  `deepseek-ai/deepseek-v4.1-flash` and GLM works non-streamed, so this is upstream.
+  The model is therefore marked `tools: false` and should be used for
+  vision/analysis, not tool work, until Hive fixes it.
+- The grok-cli version gate was not live-verified against
+  `cli-chat-proxy.grok.com` from this checkout (needs a connected account); the
+  bump follows the upstream error message in issue #153 and the default is env
+  overridable.
+- The Gemini Live STT WebSocket path was exercised only by its unit suite; no real
+  Google Live session was run.
+
+# v0.91.51 (2026-09-28)
+
+## Fixed
+
+- **Universal tool name length fitting across all provider formats (issue #148)** — Upstream OpenAI-compatible gateways (such as kiosapi.com, OneAPI, OpenAI RFC) and OpenCode Responses API (`muse-spark-1.3-contributor`) reject requests with HTTP 400 when a function tool name exceeds 64 characters (`name must be at most 64 characters, got 68`). Added `ensureFittedToolNames` centrally in `open-sse/translator/index.js` (`translateRequest`), fitting over-long names to <= 64 characters across all formats (`openai`, `openai-responses`, `claude`, `gemini`) using a deterministic numeric suffix scheme (`_1`, `_2`) that avoids collisions while preserving prompt caching. Rewrites `tool_choice`, `messages` history tool calls, and Responses `input` function calls. Reverse mapping is stored in `_toolNameMap` so response translators transparently restore original tool names to clients. Reconciled Gemini and Antigravity function name sanitizers to use `fitToolName`.
+- **Tencent CodeBuddy WAF 11128 error neutralization (issue #150)** — Tencent CodeBuddy (`copilot.tencent.com` and `codebuddy.ai`) WAF screens request bodies for rival CLI identity markers (such as Claude Code system prompt `You are Claude Code, Anthropic's official CLI for Claude...`) and blocks requests with HTTP 400 code 11128 `Illegal API invocation from an unapproved channel`. Added `open-sse/executors/codebuddyShared.js` shared by `codebuddy-intl` and `codebuddy-cn` to rewrite competitor identity markers into neutral assistant prompts in `system` and `assistant` messages before dispatch, while preserving user and tool messages byte-for-byte. Also compacts oversized tool schemas (>64KB), harvests rotated Bearer tokens from response authorization headers, and maps code 11128 as `isContentFilter: true` in `open-sse/config/errorConfig.js` to avoid cascading account cooldown burns.
+
+## Features
+
+- **OpenCode Free Space Bunny Free model** — Added `space-bunny-free` to the built-in models list in `open-sse/providers/registry/opencode.js`.
+
+## Tests
+
+- Added `tests/unit/issue-148-long-tool-name-all-providers.test.js` verifying tool name fitting and transparent response restoration across OpenAI and Responses API formats.
+- Added `tests/unit/issue-150-codebuddy-unapproved-channel.test.js` validating Claude Code identity neutralization, ZCode marker sanitization, oversized tool compaction, token rotation, and 11128 content-filter error mapping.
+- Verified test suite: 338 test files / 3,735 tests passing (0 failures).
+
+# v0.91.50 (2026-09-26)
+
+## Release Infrastructure
+
+- **The workflow linter now passes** — the `publish-npm` step polled the npm registry in a `for attempt in …` loop that never read `attempt`, which shellcheck reports as SC2034 and actionlint surfaces as a hard failure. The final error now names how many attempts were made, which is the information the loop existed to produce. Pre-existing rather than new: the loop arrived in `dd9a1f3d`, and the lint step sits after the two validation steps that had been failing, so it had never run. Reproduced locally by extracting every `run:` block and running the real shellcheck over it — SC2034 reported before the change, zero after.
+- **Compose validation no longer requires a file CI cannot have** — `docker compose config -q` failed on the runner with `env file …/.env not found`, because `docker-compose.yml` declares `env_file: .env` and only `.env.example` is committed. The obvious fix — marking the file `required: false`, available since Compose v2.24.0 — was rejected after checking what that file carries: `environment:` sets only 5 of the 22 variables the container receives, so making it optional would drop `INITIAL_PASSWORD` (falling back to the `123456` default), `JWT_SECRET`, `API_KEY_SECRET` and `REQUIRE_API_KEY`, and would remove the very `env_file` path the step exists to validate. `.env` is mandatory by design, documented in four places. The step now creates the documented starting point instead. Reproduced locally first: without a `.env` the command exits 14 with the runner's exact message, and `cp .env.example .env` makes it exit 0.
+- **A failed release smoke now says why** — `smokeRelease` spawned the release with `stdio: "ignore"`, so a server that died on startup reported only `Smoke server exited with 1` and its output was gone. Reproducing that by hand is the expensive part of a release failure, so the tail of what the release printed is now appended to the error. The pipes are drained as they fill, since a full pipe would stall the server.
+
+- **Container smoke no longer needs to delete a host directory it cannot delete** — `scripts/smoke-container.cjs` bind-mounted a host temp directory at `/app/data`. The image sets no `USER`, so the container writes as root and every file it leaves behind is root-owned, which made cleanup fail on hosted runners with `EACCES: permission denied, rmdir '…/data/auth'`. An earlier attempt here made the tree `chmod 0777` before deleting it, which cannot work: POSIX refuses `chmod` on a file you do not own, the `EPERM` was swallowed by a `catch {}`, and the delete then failed exactly as before. The fix removes the problem rather than the symptom — the container gets a named volume, so there is no host directory and no host-side permission to lose. `docker run -v name:/path` creates the volume on first use, so no explicit create step is needed, and the volume is removed alongside the container. `removeTree` and the `mkdtemp` are gone, along with the `os` import they were the only users of. This step had never run green in CI: the file arrived in `dd9a1f3d`, after the last passing Core CI run, so this is the first execution of it.
+
+## Fixed
+
+- **CLI smoke test tar extraction on Windows** — `smoke-package.cjs` ran `tar -xzf <tarball> -C <tmpdir>`. On Windows (bsdtar), `-C` changes the working directory before opening the archive; with a relative tarball path, bsdtar could not find the file inside the temp directory (`Cannot open: No such file`). Resolving to an absolute path hit a second Windows trap in Git's GNU tar: drive letters (`D:\...`) are parsed as remote tape hosts (`Cannot connect to D:`), and Windows path delimiters can fail inside `-C`. `smoke-package.cjs` and `validate-package.cjs` now feed the archive bytes through stdin using explicit standard input flags (`tar -xzf -` with `cwd: <tmpdir>`, `tar -tzf -`, `tar -xzOf -`), eliminating remote-host parsing, path escaping, and relative-path lookup across all platforms.
+- **Windows standalone release missing Next.js runtime packages (`@swc/helpers`)** — Next.js standalone file tracing emits internal dependencies (`@swc/helpers`, `@next/env`) only into the `.pnpm` virtual store. On Windows, `fixStandaloneSymlinks` converts directory symlinks to junctions, which `fs.cpSync` copies as plain directories. When `node_modules/next` became a disconnected directory without symlink resolution to `.pnpm`, `server.js` startup failed with `Cannot find module '@swc/helpers/_/_interop_require_default'`. `scripts/build.js` now bundles `@swc/helpers`, `@next/env`, `react`, and `react-dom` directly into standalone `node_modules` via `copyPackageClosure`, ensuring full self-containment on Windows.
+- **An explicit `DATA_DIR` is no longer silently discarded on macOS (issue found by CI)** — the temp-path guard added in v0.8.9 treats any `DATA_DIR` under `/var/folders/` as a smoke directory, and macOS reports its per-user temp root there. A production run — which the guard keys on via `NODE_ENV=production` — therefore redirected to `~/.9router` and wrote the database somewhere the operator never configured, with only a warning to explain the empty DB that followed. The release artifact check hit this on `macos-latest`: it runs the release as production in a `os.tmpdir()` sandbox, and the sandbox DB never appeared, so the artifact looked as if it ignored `DATA_DIR`. The guard is kept — it prevents a genuinely disposable path from silently becoming the store — and a `DATA_DIR_ALLOW_TEMP=1` opt-out declares a sandbox disposable, which the two smoke harnesses that build one now set. Only the exact string `1` enables it, like every other boolean flag here, so `DATA_DIR_ALLOW_TEMP=false` cannot quietly disable the guard. Documented in `.env.example`. Four behavioural tests, the first of any kind for this function: the guard previously had none, so the redirect was invisible to the suite.
+- **Release activation now works on Windows** — `activate()` wrote a temporary junction and renamed it over the live `current` link, and Windows refuses to rename over an existing junction (`EPERM`), so every deployment on Windows threw before the link was swapped. Pre-existing rather than new: before `dd9a1f3d` the junction creation itself failed there, so the function was already broken on Windows and that commit only moved the failure. POSIX keeps the atomic replace; Windows removes the link first, which leaves a brief window where it does not exist — unavoidable, since Windows has no `RENAME_EXCHANGE` and a text-file indirection hits the same limit. The removal goes through one shared helper that picks `rmdir` or `unlink` from the node's real type rather than from a platform flag, which is what keeps a simulated-Windows run honest: it links a POSIX symlink on Linux, and that has to unlink.
+- **`fs.cpSync` silently does nothing for Windows junctions in the release copy** — `deploy-atomic` stages a release with `fs.cpSync(builtStandalone, stagedRelease, { recursive: true, verbatimSymlinks: true })`, and `cpSync` dispatches on `lstat`. A junction lstats as a directory, so it takes the `onDir` branch and materialises the link as a real directory copy; `verbatimSymlinks` is read only by `onLink`, which a junction never reaches. Two consequences, both now stated rather than assumed. Nothing is left pointing into the build tree, so the release is self-contained on Windows by construction and `makeReleaseSelfContained` correctly finds nothing to rewrite. But the Windows artifact carries a full copy of every pnpm package where POSIX carries a link, so it is materially larger — the divergence Node's own output tracing avoids by creating junctions at all. Not changed here: preserving them needs a copy routine that recognises reparse points, which cannot be exercised without a Windows runner. An earlier draft of this entry claimed the opposite failure — that `collectSymlinks` missed links which then pointed back into a build tree deploy-atomic deletes — and added junction detection to fix it. That was wrong, and the Windows runner is what disproved it: the detection was never reached, because the copy had already dissolved the junctions. It has been reverted, and the test now pins the real per-platform shape so a future Node upgrade that changes `cpSync` dispatch fails loudly instead of quietly.
+- **OpenCode Zen is present in the provider list (issue #121) — no change was needed** — `AI_PROVIDERS` is derived from the registry through `byCategory()`, and `opencode-zen` declares `category: "apikey"` with no `hidden` flag, so it is listed. The original report came from grepping the literal string in `providers.js`, which is built at runtime and therefore contains no provider names. A regression test now pins the actual contract (listed, not hidden, `ocz` alias intact) so the next check does not repeat the false negative.
+- **Removed a dead duplicate provider logo** — `public/providers/muse.webp` was byte-identical to `muse-spark-web.webp` (same md5) and no provider has id `muse`, so the `/providers/{id}.webp` convention never loaded it. The Meta logo that the API-key provider actually uses, `meta.webp`, is unaffected.
+- **Antigravity 403 `VALIDATION_REQUIRED` cooldown** — Google answers `403 PERMISSION_DENIED` with `reason: VALIDATION_REQUIRED` and a `validation_url` when it wants the account owner to verify in a browser. The account's quota still reads healthy, so the error body is the only signal, and nothing recognised the reason — it fell through to the generic 403 rule and re-entered rotation after two minutes, burning a fallback slot each time. Measured live across 21 accounts: 429 and 403 alternating until `fallback attempt limit reached (6)`, with healthy accounts never reached. Now held out for an hour. The account itself still needs a human to visit its `validation_url`.
+- **Antigravity quota probe no longer reports an ineligible account as healthy** — A 403 from the quota endpoint produced the same "Chat may still work" message as a closed-off quota API, and `refreshAntigravityQuota` collapsed that and any other failure into a bare `null`, indistinguishable from "no data yet". An account Google had marked `VALIDATION_REQUIRED` therefore looked healthy on the dashboard and only revealed itself when a real request 403'd. A 403 is now inspected: `VALIDATION_REQUIRED` is reported as ineligible, and the reason is logged rather than discarded. Behaviour is otherwise unchanged — still `null`, still preserves the known cache.
+- **NVIDIA NIM combo 404 (issue #146, PR #145)** — A combo member built from a registry id that already carries its org prefix (`nvidia/nvidia/nemotron-…`) was rejected. Two independent sites assumed one canonical string: the allowlist from `buildConnectedProviderIds` strips one prefix while the registry stores it prefixed, so neither form resolved. `chat.js` now probes both forms, as `embeddings.js` already did, and `findModel` retries as `<alias>/<id>`. No registry carries a bare id colliding with another entry's prefixed tail, so the retry is unambiguous. Verified against NVIDIA NIM live: both forms now emit the same org-prefixed upstream model and answer `200`.
+- **Antigravity 400 on nested array tool schemas (issue #144)** — `cleanJSONSchemaForAntigravity` inferred a missing `type=object` but had no equivalent for arrays, so a nested array reached Google without `items` and was rejected with `items.items: missing field`. Added `ensureArrayItems`, filling the innermost gap with `{type: "string"}`. Verified against `ag/gemini-3.8-flash-high` live: the schema from the issue now returns `200` where it previously returned `400`.
+
+## Corrected
+
+- **Duplicated version literals collapsed into existing constants** — `anthropic-version: "2023-06-01"` appeared 19 times across 9 files while `ANTHROPIC_API_VERSION` already sat in `providers/shared.js` described as the "single source". All nineteen now reference it; the value is identical at every site, so behaviour cannot change. A production build caught the last five: an earlier sweep filtered with `grep -v "/test"`, which matched the path `src/app/api/providers/[id]/test/testUtils.js` and hid a live API route from the results — the real test directory is `tests/`. Cursor's client version was a genuine latent bug rather than plain duplication: `cursorChecksum.js` hardcoded `3.13.25` while `registry/cursor.js` carried a separate `clientVersion` that *is* read by `src/lib/oauth/services/cursor.js`, so bumping the registry left the checksum path sending the old version. The commit hash existed only in that hardcoded copy. Both are now `CURSOR_IDE_VERSION` / `CURSOR_IDE_COMMIT`.
+- **Dead-model list removed** — `DEAD_FREE_OPENCODE_MODELS` was a source-level snapshot of which free-tier ids upstream rejects, with no way to expire. It protected nothing: `/v1/models` never consulted it and routing ignored it, so a dead id was still advertised and still served before failing. It was also wrong twice — it hid two models that answer `200`, and one of its four entries could never be reached behind the `-free` suffix rule. A wrong id now fails on use, and that error names the id.
+
+## Reliability & Upstream Parity
+
+- **Env prefix standardization** — Standardized runtime env vars on `VANSROUTER_*` with legacy `NINEROUTER_*` / `VANROUTER_*` aliases kept for compatibility: peer token (`custom-server.js`, `src/lib/auth/trustedPeer.js`), max body bytes (`src/sse/utils/boundedBody.js`), and skip-update-check (`src/app/api/version/route.js`, smoke scripts). Documented in `.env.example`.
+- **Migration lock liveness hardening** — `docker/migrate-legacy-volume.cjs` reclaims locks whose owner PID is dead instead of crash-looping for the 6-hour stale window.
+
+## Reliability & Deployment Hardening
+
+- **Atomic deployment standalone symlink isolation** — In `scripts/deploy-atomic.cjs`, rewritten Next.js standalone pnpm symlinks whose targets resolve into the temporary build tree (`NEXT_DIST_DIR`) to relative intra-release links (`makeReleaseSelfContained`). Temporary build paths are cleaned *before* running production smoke checks, preventing `Cannot find module 'next'` runtime crashes when deploying via PM2.
+- **CLI package dependency closure** — Bundled Next.js server runtime and complete `open` package dependency closure into the published CLI package (`cli/scripts/build-cli.js`). Moved `better-sqlite3` native installation out of npm postinstall to lazy first-launch initialization (`cli.js`) with automatic fallback to Node's built-in `node:sqlite`, eliminating native C++ ABI compilation failures across Node 20/22/musl environments.
+- **Docker legacy volume migration deadlock fix** — Added process PID liveness detection (`isLockOwnerAlive`) in `docker/migrate-legacy-volume.cjs`. If a container terminates abruptly (OOMKilled, host restart) during migration, stale locks from dead processes are automatically reclaimed on subsequent boot instead of triggering a 6-hour entrypoint crash-loop under `set -eu`.
+- **Docker multi-arch native binary pinning** — Pinned `better-sqlite3` musl prebuilt binaries with sha256 checksums in `Dockerfile` and `docker/native-deps/package-lock.json`, eliminating fragile source compilation in emulated ARM64 QEMU builds.
+- **CI/CD promotion shell syntax fix** — Fixed bash regex condition syntax `[[ "$STAGING_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]` in `.github/workflows/release.yml` under GitHub Actions runner environment.
+
+## Provider & Model Enhancements
+
+- **Free-tier model zero-pricing** — Registered wildcard patterns `*:free` and `*-free` in `open-sse/providers/pricing.js` to assign zero-rate cost ($0.00) across all input, output, cached, and reasoning tokens, preventing false quota deductions for free community models.
+- **DeepSeek V4.1 Flash Free multimodal vision** — Added explicit multimodal capability entry (`vision: true`, 1M contextWindow) for `tokenharbor/deepseek-v4.1-flash:free` in `open-sse/providers/capabilities.js`.
+- **OpenCode Free error translation** — In `open-sse/executors/opencode.js`, mapped upstream OpenCode `ModelError` (401) to HTTP 404 `model_not_found` and `Model is unavailable` (400) to HTTP 503 `service_unavailable`, preventing confusing `invalid_api_key` errors on public no-auth endpoints.
+- **OpenCode zen-lane auth fallback** — A keyed `opencode-zen` connection that lost its key could send `Authorization: Bearer undefined`, which the upstream reads as no credential at all. The `public` fallback now applies to every lane this executor serves; a real key still takes precedence.
+- **OpenCode dead-model list widened** — `suggested-models/filters.js` now excludes four ids measured as rejected through our own `/v1/chat/completions` on 2026-09-26 (`deepseek-v4-flash-free`, `hy3-free`, `jev-1.13-free`, `deepseek-v4.1-flash:free`), with the observed status of each recorded next to it. `space-bunny-free` and both `muse-spark-*-contributor-free` models answer, and stay offered.
+- **Build-time OOM misreporting** — The no-undef pre-step inside `scripts/build.js` peaks around 1.2 GB and took 91 s; when the kernel OOM-killed it the build reported `Next.js build failed` even though Next never started. The pre-step is now skippable with `SKIP_PREBUILD_LINT=1` (CI already runs it as its own step), and static-generation worker count can be capped with `NEXT_BUILD_CPUS`. Both default to the previous behaviour, so release and CI builds are unchanged.
+
+## Tests
+
+- Added `tests/unit/legacy-volume-migration.test.js` covering lock recovery on dead PID owners, canonical DB preservation, and sidecar quarantine.
+- Added `tests/unit/release-hardening.test.js` validating package closure, tarball integrity, and standalone symlink containment.
+- Added `tests/unit/remote-password-bootstrap.test.js` covering the remote default-password contract against the route itself; the previous post-merge guard asserted the same rule by grepping the source for a `status: 403` string, which only proved the text existed and broke on every refactor.
+- Extended `tests/unit/tokenharbor-provider.test.js` asserting multimodal vision and zero-rate pricing for `deepseek-v4.1-flash:free`.
+- Verified test suite: 326 test files / 3,664 tests passing.
+
 # v0.91.33 (2026-09-25)
 
 ## Features

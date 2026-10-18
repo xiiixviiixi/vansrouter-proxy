@@ -95,18 +95,23 @@ export function reorderByCapabilities(models, required) {
 // in the chain must accept them), reasoning fields follow the primary target,
 // and the limits are the safe extremes: smallest window, largest output.
 // Members that name another combo resolve through comboLookup (name → models).
-export function aggregateComboCapabilities(comboModels, comboLookup = null, _depth = 0) {
+// Seats are written with UI aliases (e.g. `ocg/...`); resolveCaps maps those to
+// the real provider id so per-provider capability overrides still apply.
+export function aggregateComboCapabilities(comboModels, comboLookup = null, resolveCaps = null, _depth = 0) {
   const members = Array.isArray(comboModels) ? comboModels.filter((id) => typeof id === "string") : [];
   if (members.length === 0 || _depth > 6) return null;
 
   const allCaps = members.map((fullId) => {
     const name = stripComboPrefix(fullId);
     if (comboLookup?.[name]) {
-      return aggregateComboCapabilities(comboLookup[name], comboLookup, _depth + 1)
+      return aggregateComboCapabilities(comboLookup[name], comboLookup, resolveCaps, _depth + 1)
+        ?? resolveCaps?.(name)
         ?? getCapabilitiesForModel(null, name);
     }
     const slash = fullId.indexOf("/");
-    return getCapabilitiesForModel(slash > 0 ? fullId.slice(0, slash) : null, fullId.slice(slash + 1));
+    const local = getCapabilitiesForModel(slash > 0 ? fullId.slice(0, slash) : null, fullId.slice(slash + 1));
+    const override = resolveCaps?.(fullId);
+    return override ? { ...local, ...override } : local;
   });
 
   const primary = allCaps[0];

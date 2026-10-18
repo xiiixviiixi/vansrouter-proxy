@@ -1,4 +1,10 @@
 import { DefaultExecutor } from "./default.js";
+import {
+  neutralizeCodeBuddyChannelIdentity,
+  compactOversizedTools,
+  captureRotatedToken,
+  parseCodeBuddyError,
+} from "./codebuddyShared.js";
 
 const REQUIRED_SYSTEM_PROMPT = "You are CodeBuddy Code.";
 
@@ -15,6 +21,17 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
     super("codebuddy-intl");
   }
 
+  async execute(input) {
+    const result = await super.execute(input);
+    const resp = result instanceof Response ? result : result?.response;
+    captureRotatedToken(resp, input.credentials);
+    return result;
+  }
+
+  parseError(response, bodyText) {
+    return parseCodeBuddyError(response, bodyText);
+  }
+
   transformRequest(model, body, stream, credentials) {
     const input = body && typeof body === "object" ? structuredClone(body) : body;
     const transformed = super.transformRequest(model, input, stream, credentials);
@@ -27,9 +44,12 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
       transformed.reasoning_summary = "auto";
     }
 
+    // Neutralize third-party CLI identity markers (Claude Code, ZCode) to avoid 11128 WAF block
+    const sanitizedMessages = neutralizeCodeBuddyChannelIdentity(transformed.messages);
+
     // CodeBuddy rejects plain OpenAI shape (11101 invalid request): needs a
     // leading system prompt + user content as typed blocks, not a bare string.
-    const source = Array.isArray(transformed.messages) ? transformed.messages : [];
+    const source = Array.isArray(sanitizedMessages) ? sanitizedMessages : [];
     const messages = [{ role: "system", content: REQUIRED_SYSTEM_PROMPT }];
     let requiredPromptSeen = false;
     for (const message of source) {
@@ -47,7 +67,39 @@ export class CodeBuddyIntlExecutor extends DefaultExecutor {
     }
     transformed.messages = messages;
 
+    // Compact oversized tools if >64KB to avoid sensitive content rejection
+    if (Array.isArray(transformed.tools) && transformed.tools.length > 0) {
+      transformed.tools = compactOversizedTools(transformed.tools);
+    }
+
     return transformed;
+  }
+  parseError(response, bodyText) {
+    if (bodyText) {
+      try {
+        const data = JSON.parse(bodyText);
+        const msg = data?.msg || data?.message || data?.error?.message || "";
+        if (data?.code === 6004 || /超出频率限制|frequency limit|限额/i.test(msg)) {
+          let resetsAtMs = null;
+          const match = msg.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})(?:\s*UTC\+?([0-9:]+))?/i);
+          if (match) {
+            const dp = match[1];
+            const tp = match[2];
+            const tz = match[3]
+              ? (match[3].includes(":") ? (match[3].startsWith("+") ? match[3] : `+${match[3]}`) : `+${match[3].padStart(2, "0")}:00`)
+              : "+08:00";
+            const dt = new Date(`${dp}T${tp}${tz}`);
+            if (!isNaN(dt.getTime())) resetsAtMs = dt.getTime();
+          }
+          return {
+            status: 429,
+            message: msg || "CodeBuddy frequency limit (6004)",
+            resetsAtMs,
+          };
+        }
+      } catch {}
+    }
+    return super.parseError(response, bodyText);
   }
 }
 

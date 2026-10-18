@@ -1,21 +1,40 @@
 "use server";
 
 import { NextResponse } from "next/server";
+import { resolveCliApiKey } from "../resolveApiKey.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { probeCliInstalled } from "../_shared/cliConfig.js";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const PROVIDER_ID = "9router";
-
 const getOmpDir = () => path.join(os.homedir(), ".omp", "agent");
 const getOmpDbPath = () => path.join(getOmpDir(), "agent.db");
 const getOmpModelsYmlPath = () => path.join(getOmpDir(), "models.yml");
 
-// Match a provider block: its header plus every line indented deeper than that header
-const providerBlockRe = () => new RegExp(`^([ \\t]*)${PROVIDER_ID}:[ \\t]*\\r?\\n(?:\\1[ \\t]+.*\\r?\\n?)*`, "gm");
-
-const checkOmpInstalled = () => probeCliInstalled("omp", [getOmpDbPath(), getOmpModelsYmlPath()]);
+const checkOmpInstalled = async () => {
+  const isWindows = os.platform() === "win32";
+  try {
+    const command = isWindows ? "where omp" : "which omp";
+    await execAsync(command, { windowsHide: true });
+    return true;
+  } catch {
+    try {
+      await fs.access(getOmpDbPath());
+      return true;
+    } catch {
+      try {
+        await fs.access(getOmpModelsYmlPath());
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+};
 
 const readModelsYml = async () => {
   try {
@@ -25,103 +44,139 @@ const readModelsYml = async () => {
   }
 };
 
-const has9RouterInYml = (content) => Boolean(content) && (content.includes(`${PROVIDER_ID}:`) || content.includes("localhost:20128"));
+const has9RouterInYml = (content) => {
+  if (!content) return false;
+  return content.includes("9router:") || content.includes("localhost:20128");
+};
 
-const buildOmpProviderYaml = (baseUrl, apiKey) => `  ${PROVIDER_ID}:
-    baseUrl: ${baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}
-    apiKey: ${apiKey || "sk_9router"}
+// Build standard 9Router provider block for models.yml
+const buildOmpProviderYaml = (baseUrl, apiKey) => {
+  const normalizedBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+  const key = apiKey || "";
+  return `  ${PROVIDER_ID}:
+    baseUrl: ${normalizedBaseUrl}
+    apiKey: ${key}
     api: openai-completions
     authHeader: true
     disableStrictTools: true
     discovery:
       type: proxy`;
-
-const upsertProviderBlock = (ymlContent, providerBlock) => {
-  let next = ymlContent.replace(providerBlockRe(), "");
-  if (!next.trim()) return `providers:\n${providerBlock}\n`;
-  if (next.includes("providers:")) return next.replace(/providers:/, `providers:\n${providerBlock}`);
-  return `${next.trim()}\n\nproviders:\n${providerBlock}\n`;
-};
-
-// Agent credentials live in agent.db; models.yml stays the source of truth when the driver is absent
-const writeAgentDbCredential = async (baseUrl, apiKey) => {
-  try {
-    const Database = (await import("better-sqlite3")).default;
-    const db = new Database(getOmpDbPath());
-    const now = Math.floor(Date.now() / 1000);
-    db.prepare("DELETE FROM auth_credentials WHERE provider = ?").run(PROVIDER_ID);
-    db.prepare(
-      "INSERT INTO auth_credentials (provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?, ?)"
-    ).run(PROVIDER_ID, "api_key", JSON.stringify({ apiKey: apiKey || "sk_9router", baseUrl }), now, now);
-    db.close();
-  } catch { /* Non-critical: models.yml is primary */ }
 };
 
 export async function GET() {
   try {
     const installed = await checkOmpInstalled();
     if (!installed) {
-      return NextResponse.json({ installed: false, config: null, message: "Oh My Pi is not installed" });
+      return NextResponse.json({
+        installed: false,
+        config: null,
+        message: "Oh My Pi is not installed",
+      });
     }
+
+    const ymlContent = await readModelsYml();
+    const has9Router = has9RouterInYml(ymlContent);
 
     return NextResponse.json({
       installed: true,
-      has9Router: has9RouterInYml(await readModelsYml()),
+      has9Router,
       configPath: getOmpModelsYmlPath(),
     });
-  } catch (error) {
-    console.log("Error checking omp settings:", error);
-    return NextResponse.json({ error: { message: "Failed to check omp settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function POST(request) {
-  let body;
+  let rawBody;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     return NextResponse.json({ error: { message: "Invalid JSON body" } }, { status: 400 });
   }
 
   try {
-    const { baseUrl, apiKey } = body || {};
+    const { baseUrl, apiKey } = rawBody || {};
     if (!baseUrl) {
       return NextResponse.json({ error: { message: "baseUrl is required" } }, { status: 400 });
     }
 
+    const resolvedKey = await resolveCliApiKey(apiKey);
+
     await fs.mkdir(getOmpDir(), { recursive: true });
-    const providerBlock = buildOmpProviderYaml(baseUrl, apiKey);
-    await fs.writeFile(getOmpModelsYmlPath(), upsertProviderBlock(await readModelsYml(), providerBlock), "utf-8");
-    await writeAgentDbCredential(baseUrl, apiKey);
+
+    let ymlContent = await readModelsYml();
+    const providerBlock = buildOmpProviderYaml(baseUrl, resolvedKey);
+
+    // Remove existing 9router provider if present
+    const regex = new RegExp(`\\s*${PROVIDER_ID}:[\\s\\S]*?(?=\\n[ \\t]{0,2}\\w+:|$)`, "g");
+    ymlContent = ymlContent.replace(regex, "");
+
+    if (!ymlContent.trim()) {
+      ymlContent = `providers:\n${providerBlock}\n`;
+    } else if (ymlContent.includes("providers:")) {
+      ymlContent = ymlContent.replace(/providers:/, `providers:\n${providerBlock}`);
+    } else {
+      ymlContent = `${ymlContent.trim()}\n\nproviders:\n${providerBlock}\n`;
+    }
+
+    await fs.writeFile(getOmpModelsYmlPath(), ymlContent, "utf-8");
+
+    // Best-effort update to agent.db if better-sqlite3 or node:sqlite is present
+    try {
+      let Database;
+      try {
+        const mod = await import("better-sqlite3");
+        Database = mod.default || mod;
+      } catch {
+        // fallback ignored
+      }
+      if (Database) {
+        const dbPath = getOmpDbPath();
+        const db = new Database(dbPath);
+        db.prepare("DELETE FROM auth_credentials WHERE provider = ?").run(PROVIDER_ID);
+        db.prepare(
+          "INSERT INTO auth_credentials (provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?, ?)"
+        ).run(
+          PROVIDER_ID,
+          "api_key",
+          JSON.stringify({ apiKey: resolvedKey, baseUrl }),
+          Math.floor(Date.now() / 1000),
+          Math.floor(Date.now() / 1000)
+        );
+        db.close();
+      }
+    } catch {
+      // Non-critical: models.yml is primary
+    }
 
     return NextResponse.json({
       success: true,
       message: "Oh My Pi settings applied! Run 'omp' and all 9Router models appear under 9router in /model.",
       configPath: getOmpModelsYmlPath(),
     });
-  } catch (error) {
-    console.log("Error updating omp settings:", error);
-    return NextResponse.json({ error: { message: "Failed to update omp settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function DELETE() {
   try {
-    const ymlContent = await readModelsYml();
-    if (!ymlContent) {
-      return NextResponse.json({ success: true, message: "No config file to reset" });
-    }
+    let ymlContent = await readModelsYml();
+    const regex = new RegExp(`\\s*${PROVIDER_ID}:[\\s\\S]*?(?=\\n[ \\t]{0,2}\\w+:|$)`, "g");
+    ymlContent = ymlContent.replace(regex, "");
 
-    const next = ymlContent.replace(providerBlockRe(), "");
-    if (next.trim() === "providers:") {
+    if (ymlContent.trim() === "providers:") {
       await fs.rm(getOmpModelsYmlPath(), { force: true });
     } else {
-      await fs.writeFile(getOmpModelsYmlPath(), next, "utf-8");
+      await fs.writeFile(getOmpModelsYmlPath(), ymlContent, "utf-8");
     }
 
-    return NextResponse.json({ success: true, message: "9Router removed from Oh My Pi" });
-  } catch (error) {
-    console.log("Error resetting omp settings:", error);
-    return NextResponse.json({ error: { message: "Failed to reset omp settings" } }, { status: 500 });
+    return NextResponse.json({
+      success: true,
+      message: "9Router removed from Oh My Pi",
+    });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }

@@ -10,13 +10,14 @@ import { cleanJSONSchemaForAntigravity, normalizeGeminiContents } from "../trans
 import { DEFAULT_THINKING_AG_SIGNATURE } from "../config/defaultThinkingSignature.js";
 import { getGeminiThoughtSignatureSync } from "../services/thoughtSignatureStore.js";
 import { resolveAntigravityUpstreamModel } from "../config/providerModels.js";
+import { fitToolName } from "../translator/concerns/toolCall.js";
 
 // Sanitize function name: Gemini requires [a-zA-Z_][a-zA-Z0-9_.:\-]{0,63}
 function sanitizeFunctionName(name) {
   if (!name) return "_unknown";
   let s = name.replace(/[^a-zA-Z0-9_.:\-]/g, "_");
   if (!/^[a-zA-Z_]/.test(s)) s = "_" + s;
-  return s.substring(0, 64);
+  return fitToolName(s, 64);
 }
 
 const MAX_RETRY_AFTER_MS = 10000;

@@ -15,6 +15,7 @@ export default {
     },
   },
   category: "freeTier",
+  hasFree: true,
   authType: "apikey",
   hasOAuth: true,
   authModes: ["apikey", "oauth"],

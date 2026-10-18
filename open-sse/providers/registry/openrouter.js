@@ -2,6 +2,7 @@ export default {
   id: "openrouter",
   priority: 10,
   hasFree: true,
+  freeRefresh: "daily",
   alias: "openrouter",
   display: {
     name: "OpenRouter",
@@ -32,7 +33,7 @@ export default {
     { id: "qwen/qwen3-embedding-8b", name: "Qwen3 Embedding 8B", kind: "embedding" },
     { id: "perplexity/pplx-embed-v1-4b", name: "Perplexity Embed V1 4B", kind: "embedding" },
     { id: "perplexity/pplx-embed-v1-0.6b", name: "Perplexity Embed V1 0.6B", kind: "embedding" },
-    { id: "nvidia/llama-nemotron-embed-vl-1b-v2:free", name: "NVIDIA Nemotron Embed VL 1B V2 (Free)", kind: "embedding" },
+    { id: "nvidia/llama-nemotron-embed-vl-1b-v2:free", name: "NVIDIA Nemotron Embed VL 1B V2 (Free)", kind: "embedding", hasFree: true },
     { id: "openai/gpt-4o-mini-tts", name: "GPT-4o Mini TTS", kind: "tts" },
     { id: "openai/tts-1-hd", name: "TTS-1 HD", kind: "tts" },
     { id: "openai/tts-1", name: "TTS-1", kind: "tts" },

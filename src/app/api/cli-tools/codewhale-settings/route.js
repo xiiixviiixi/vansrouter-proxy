@@ -1,68 +1,86 @@
 "use server";
 
 import { NextResponse } from "next/server";
+import { resolveCliApiKey } from "../resolveApiKey.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { probeCliInstalled } from "../_shared/cliConfig.js";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { parseTOML, stringifyTOML } from "confbox";
+
+const execAsync = promisify(exec);
 
 const getCodewhaleDir = () => path.join(os.homedir(), ".codewhale");
 const getCodewhaleConfigPath = () => path.join(getCodewhaleDir(), "config.toml");
 
-const checkCodewhaleInstalled = () => probeCliInstalled("codewhale", [getCodewhaleConfigPath()]);
+const checkCodewhaleInstalled = async () => {
+  const isWindows = os.platform() === "win32";
+  try {
+    const command = isWindows ? "where codewhale" : "which codewhale";
+    await execAsync(command, { windowsHide: true });
+    return true;
+  } catch {
+    try {
+      await fs.access(getCodewhaleConfigPath());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
 
-const readConfigToml = async () => {
+const has9RouterConfig = (content) => {
+  if (!content) return false;
+  return content.includes("managed by 9Router") || content.includes("localhost:20128");
+};
+
+const readConfig = async () => {
   try {
     return await fs.readFile(getCodewhaleConfigPath(), "utf-8");
-  } catch (error) {
-    if (error.code === "ENOENT") return "";
-    throw error;
-  }
-};
-
-const parseConfigToml = (content) => {
-  if (!content) return {};
-  try {
-    return parseTOML(content);
   } catch {
-    return {};
+    return null;
   }
 };
-
-const has9RouterConfig = (content) => Boolean(content) && (content.includes("managed by 9Router") || content.includes("localhost:20128"));
 
 export async function GET() {
   try {
     const installed = await checkCodewhaleInstalled();
     if (!installed) {
-      return NextResponse.json({ installed: false, config: null, message: "CodeWhale CLI is not installed" });
+      return NextResponse.json({
+        installed: false,
+        config: null,
+        message: "CodeWhale CLI is not installed",
+      });
     }
 
-    const content = await readConfigToml();
+    const content = await readConfig();
+    let config = null;
+    try {
+      if (content) config = parseTOML(content);
+    } catch {}
 
     return NextResponse.json({
       installed: true,
-      config: parseConfigToml(content),
+      config,
       has9Router: has9RouterConfig(content),
       configPath: getCodewhaleConfigPath(),
     });
-  } catch (error) {
-    console.log("Error checking codewhale settings:", error);
-    return NextResponse.json({ error: { message: "Failed to check codewhale settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function POST(request) {
-  let body;
+  let rawBody;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     return NextResponse.json({ error: { message: "Invalid JSON body" } }, { status: 400 });
   }
 
   try {
-    const { baseUrl, apiKey, model } = body || {};
+    const { baseUrl, apiKey, model } = rawBody || {};
     if (!baseUrl) {
       return NextResponse.json({ error: { message: "baseUrl is required" } }, { status: 400 });
     }
@@ -70,42 +88,56 @@ export async function POST(request) {
     const configPath = getCodewhaleConfigPath();
     await fs.mkdir(getCodewhaleDir(), { recursive: true });
 
-    const config = parseConfigToml(await readConfigToml());
-    config.openai = {
-      base_url: baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`,
-      api_key: apiKey || "sk_9router",
-      model: model || config.openai?.model || "provider/model-id",
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = parseTOML(raw);
+    } catch {}
+
+    const normalizedBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+
+    existing.openai = {
+      base_url: normalizedBaseUrl,
+      api_key: await resolveCliApiKey(apiKey),
+      model: model || "provider/model-id",
     };
 
-    await fs.writeFile(configPath, `# CodeWhale config — managed by 9Router\n\n${stringifyTOML(config)}`, "utf-8");
+    const header = "# CodeWhale config — managed by 9Router\n\n";
+    const content = header + stringifyTOML(existing);
 
-    return NextResponse.json({ success: true, message: "CodeWhale settings applied successfully!", configPath });
-  } catch (error) {
-    console.log("Error updating codewhale settings:", error);
-    return NextResponse.json({ error: { message: "Failed to update codewhale settings" } }, { status: 500 });
+    await fs.writeFile(configPath, content, "utf-8");
+
+    return NextResponse.json({
+      success: true,
+      message: "CodeWhale settings applied successfully!",
+      configPath,
+    });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function DELETE() {
   try {
     const configPath = getCodewhaleConfigPath();
-    const content = await readConfigToml();
-    if (!content) {
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = parseTOML(raw);
+    } catch {
       return NextResponse.json({ success: true, message: "No config file to reset" });
     }
 
-    const config = parseConfigToml(content);
-    delete config.openai;
+    delete existing.openai;
 
-    if (Object.keys(config).length === 0) {
+    if (Object.keys(existing).length === 0) {
       await fs.rm(configPath, { force: true });
     } else {
-      await fs.writeFile(configPath, stringifyTOML(config), "utf-8");
+      await fs.writeFile(configPath, stringifyTOML(existing), "utf-8");
     }
 
     return NextResponse.json({ success: true, message: "9Router removed from CodeWhale" });
-  } catch (error) {
-    console.log("Error resetting codewhale settings:", error);
-    return NextResponse.json({ error: { message: "Failed to reset codewhale settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }

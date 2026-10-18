@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useReducer } from "react";
-import { Button, Modal } from "@/shared/components";
+import PropTypes from "prop-types";
+import { Button, Modal, Select, Toggle } from "@/shared/components";
+import { CAPACITY_META, STT_TRANSPORT_META, STT_TRANSPORTS } from "@/shared/constants/models";
+
+const defaultCaps = () => Object.fromEntries(Object.keys(CAPACITY_META).map((key) => [key, false]));
+
 
 function modalReducer(state, action) {
   switch (action.type) {
@@ -19,14 +24,21 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
   const [state, dispatch] = useReducer(modalReducer, { modelId: "", testStatus: null, testError: "", saving: false });
   const { modelId, testStatus, testError, saving } = state;
   const [prevIsOpen, setPrevIsOpen] = useState(false);
+  // Capability toggles (whitelisted keys from CAPACITY_META) and the realtime
+  // dispatch marker for the transport select; "" = provider default REST.
+  const [caps, setCaps] = useState(defaultCaps);
+  const [transport, setTransport] = useState("");
 
   // Reset state when modal opens (prev-prop pattern — no extra render cycle)
   if (isOpen && !prevIsOpen) {
     setPrevIsOpen(true);
     dispatch({ type: "RESET" });
+    setCaps(defaultCaps());
+    setTransport("");
   } else if (!isOpen && prevIsOpen) {
     setPrevIsOpen(false);
   }
+
 
   // Strip provider's own alias prefix (e.g. "cc/model" -> "model" for cc provider)
   const stripAlias = (id) => {
@@ -56,7 +68,9 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
     if (!cleanId || saving) return;
     dispatch({ type: "SAVE_START" });
     try {
-      await onSave(cleanId);
+      // caps.stt is UI-only; the parent save flow derives the model type from
+      // it and forwards the pinned transport (null unless the caller picked one).
+      await onSave(cleanId, caps, caps.stt ? transport : null);
     } finally {
       dispatch({ type: "SAVE_DONE" });
     }
@@ -94,6 +108,48 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
           <p className="text-xs text-text-muted mt-1">
             Sent to provider as: <code className="font-mono bg-sidebar px-1 rounded">{stripAlias(modelId.trim()) || "model-id"}</code>
           </p>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium mb-1.5 block">Capabilities</label>
+          <div className="flex flex-wrap gap-4">
+            {Object.entries(CAPACITY_META).map(([key, meta]) => (
+              <Toggle
+                key={key}
+                checked={!!caps[key]}
+                onChange={(v) => setCaps((prev) => ({ ...prev, [key]: v }))}
+                label={meta.label}
+                description={meta.desc}
+                size="sm"
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* STT is a model TYPE, not a chat capability: the save flow turns this
+            flag into type "stt" (the API honours a transport only on stt
+            records). The select pins the realtime dispatch marker persisted
+            with the model; the whitelist is the shared STT_TRANSPORT_META. */}
+        <div>
+          <Toggle
+            checked={!!caps.stt}
+            onChange={(v) => { setCaps((prev) => ({ ...prev, stt: v })); if (!v) setTransport(""); }}
+            label="Speech to text"
+            description="Transcribes audio via /v1/audio/transcriptions"
+            size="sm"
+          />
+          {caps.stt && (
+            <div className="mt-3">
+              <Select
+                label="Transport"
+                value={transport}
+                onChange={(e) => setTransport(e.target.value)}
+                placeholder="Provider default (REST)"
+                options={STT_TRANSPORTS.map((t) => ({ value: t, label: STT_TRANSPORT_META[t].label }))}
+                hint="Realtime transport marker for the STT dispatcher. Empty keeps the provider's REST format."
+              />
+            </div>
+          )}
         </div>
 
         {/* Test result */}

@@ -15,11 +15,31 @@ import Card from "./Card";
 import OverviewCards from "@/app/(dashboard)/dashboard/usage/components/OverviewCards";
 import UsageTable, { fmt, fmtTime } from "@/app/(dashboard)/dashboard/usage/components/UsageTable";
 import dynamic from "next/dynamic";
-// Lazy-load: keeps @xyflow/react out of the shared bundle until topology renders
-const ProviderTopology = dynamic(() => import("@/app/(dashboard)/dashboard/usage/components/ProviderTopology"), { ssr: false });
-import UsageChart from "@/app/(dashboard)/dashboard/usage/components/UsageChart";
-import ProviderBarChart from "@/app/(dashboard)/dashboard/usage/components/ProviderBarChart";
-import TopModelsChart from "@/app/(dashboard)/dashboard/usage/components/TopModelsChart";
+// Panel-sized placeholder for a single topology column, shared with
+// topologySkeleton so the two cannot drift (see its comment below).
+const TOPOLOGY_PANEL_CLASS = "h-[320px] w-full animate-pulse rounded-lg border border-border bg-bg-subtle/50 sm:h-[480px]";
+const topologyPanelSkeleton = <div className={TOPOLOGY_PANEL_CLASS} aria-hidden="true" />;
+
+// ponytail: two independent guards, both needed. `loading:` (below) keeps the
+// skeleton up for the whole chunk fetch, so the area never collapses mid-fetch;
+// the parent gates keep ~721KB of recharts + reactflow off the critical path so
+// the page is interactive first. Drop either one and you regress one half:
+// without `loading:` the chart area goes 0px mid-fetch, without a gate the
+// heavy chunks land ~300ms earlier and TBT climbs back to ~3.5s.
+//
+// The two gates are distinct on purpose:
+//   idleReadyForTopology — requestIdleCallback. The reactflow topology sits at
+//     y≈718, partly inside the 823px viewport, so a visibility gate would fire
+//     immediately and change nothing. Idle already keeps its 229KB off first paint.
+//   chartsInView — IntersectionObserver on the first recharts chart (y≈1624,
+//     far below the fold). Idle fires almost immediately when the main thread
+//     frees up, which does NOT keep the 482KB of recharts off the critical path;
+//     visibility does, because it cannot fire until the user scrolls.
+
+const ProviderTopology = dynamic(() => import("@/app/(dashboard)/dashboard/usage/components/ProviderTopology"), { ssr: false, loading: () => topologyPanelSkeleton });
+const UsageChart = dynamic(() => import("@/app/(dashboard)/dashboard/usage/components/UsageChart"), { ssr: false, loading: () => chartSkeleton });
+const ProviderBarChart = dynamic(() => import("@/app/(dashboard)/dashboard/usage/components/ProviderBarChart"), { ssr: false, loading: () => chartSkeleton });
+const TopModelsChart = dynamic(() => import("@/app/(dashboard)/dashboard/usage/components/TopModelsChart"), { ssr: false, loading: () => chartSkeleton });
 
 // Skeleton placeholders sized to match the final content so the layout does
 // not shift (CLS) when data arrives. Keep dimensions in sync with the real
@@ -34,13 +54,17 @@ const overviewSkeleton = (
 
 const topologySkeleton = (
   <div className="grid min-w-0 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
-    <div className="h-[320px] w-full animate-pulse rounded-lg border border-border bg-bg-subtle/50 sm:h-[480px]" aria-hidden="true" />
-    <div className="h-[320px] w-full animate-pulse rounded-lg border border-border bg-bg-subtle/50 sm:h-[480px]" aria-hidden="true" />
+    {topologyPanelSkeleton}
+    {topologyPanelSkeleton}
   </div>
 );
 
+// Must match the vertical footprint of UsageChart's Card (p-3/p-4 + toggle row
+// + gap-3 + 220px ResponsiveContainer) so the chartsInView gate swap does not
+// shift the table below. ProviderBarChart/TopModelsChart are shorter (~252px) but
+// share this placeholder, so their skeletons are 300px tall while loading.
 const chartSkeleton = (
-  <div className="h-[220px] w-full animate-pulse rounded-lg border border-border bg-bg-subtle/50" aria-hidden="true" />
+  <div className="min-h-[300px] w-full animate-pulse rounded-lg border border-border bg-bg-subtle/50" aria-hidden="true" />
 );
 
 const tableSkeleton = (
@@ -68,6 +92,34 @@ function TimeAgo({ timestamp }) {
 }
 
 const EMPTY_REQUESTS = [];
+
+// Fires once when the element first intersects the viewport (plus rootMargin),
+// then disconnects — a below-fold element only ever needs the one transition.
+// ponytail: no re-arm on scroll-out; if an "unload when hidden" need appears,
+// keep the observer and toggle instead.
+function useInView(rootMargin = "200px") {
+  const ref = useRef(null);
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setInView(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setInView(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [rootMargin]);
+  return [ref, inView];
+}
 
 function RecentRequests({ requests = EMPTY_REQUESTS }) {
   return (
@@ -284,11 +336,25 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const [tableView, setTableView] = useState("model");
   const [viewMode, setViewMode] = useState("costs");
   const [providers, setProviders] = useState([]);
+  const [idleReadyForTopology, setIdleReadyForTopology] = useState(false);
+  const [chartsRef, chartsInView] = useInView("200px");
   const [periodLocal, setPeriodLocal] = useState("today");
   const isInitialLoad = useRef(true);
   const hasLoadedStats = useRef(false);
   const period = periodProp ?? periodLocal;
   const setPeriod = setPeriodProp ?? setPeriodLocal;
+  // Hold the reactflow topology (~229KB) until the page is idle, so the first
+  // input is not competing with its parse. It sits partly in view, so this is
+  // the only gate that can help it — see the note above the dynamic() imports.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(() => setIdleReadyForTopology(true), { timeout: 2000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = setTimeout(() => setIdleReadyForTopology(true), 200);
+    return () => clearTimeout(timer);
+  }, []);
   // Fetch connected providers once, deduplicate by provider type
   // Always include noAuth free providers (e.g. opencode) regardless of connections
   useEffect(() => {
@@ -306,13 +372,13 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         }
         const seen = new Set();
         const unique = (d?.connections || []).reduce((acc, c) => {
-          if (c.isActive === false || !isLLMProvider(c.provider) || seen.has(c.provider)) return acc;
+          if (c.isActive === false || !isLLMProvider(c.provider) || AI_PROVIDERS[c.provider]?.hidden || seen.has(c.provider)) return acc;
           seen.add(c.provider);
           acc.push({ ...c, nodeName: nodeNameMap[c.provider] || null });
           return acc;
         }, []);
         const noAuthProviders = Object.values(FREE_PROVIDERS).reduce((acc, p) => {
-          if (p.noAuth && !seen.has(p.id) && isLLMProvider(p.id)) acc.push({ provider: p.id, name: p.name });
+          if (p.noAuth && !p.hidden && !seen.has(p.id) && isLLMProvider(p.id)) acc.push({ provider: p.id, name: p.name });
           return acc;
         }, []);
         setProviders([...unique, ...noAuthProviders]);
@@ -556,7 +622,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       {loading ? overviewSkeleton : <OverviewCards stats={stats} />}
 
       {/* Provider topology + Recent Requests */}
-      {loading ? topologySkeleton : (
+      {loading || !idleReadyForTopology ? topologySkeleton : (
         <div className="grid min-w-0 grid-cols-1 items-stretch gap-2 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
           <ProviderTopology
             providers={providers}
@@ -568,11 +634,17 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         </div>
       )}
 
-      {/* Token / Cost chart - sync period */}
-      {loading ? chartSkeleton : <UsageChart period={period} />}
+      {/* Token / Cost chart - sync period. `chartsRef` marks the first recharts
+          region; the visibility gate replaces the old idle gate for the three
+          recharts charts (UsageChart + the byProvider/byModel pair below).
+          `chartSkeleton` is sized to UsageChart's full height so this swap does
+          not move the table. */}
+      <div ref={chartsRef}>
+        {loading || !chartsInView ? chartSkeleton : <UsageChart period={period} />}
+      </div>
 
       {/* Provider and model breakdown charts */}
-      {!loading && (stats.byProvider || stats.byModel) && (
+      {!loading && chartsInView && (stats.byProvider || stats.byModel) && (
         <div className="grid min-w-0 grid-cols-1 gap-2 lg:grid-cols-2">
           <ProviderBarChart byProvider={stats.byProvider} />
           <TopModelsChart byModel={stats.byModel} />

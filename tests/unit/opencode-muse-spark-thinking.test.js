@@ -63,10 +63,10 @@ describe("OpenCode Free Muse Spark thinking", () => {
     const executor = new OpenCodeExecutor();
     const url = executor.buildUrl("union-alpha");
     expect(url).toBe("https://opencode.ai/zen/v1/messages");
-    expect(executor.buildHeaders({}, true, "union-alpha")).toMatchObject({
+    expect(executor.buildHeaders({}, true, url, "union-alpha")).toMatchObject({
       "anthropic-version": "2023-06-01",
     });
-    expect(executor.buildHeaders({}, true, "big-pickle")).not.toHaveProperty("anthropic-version");
+    expect(executor.buildHeaders({}, true, executor.buildUrl("big-pickle"), "big-pickle")).not.toHaveProperty("anthropic-version");
 
     const translated = translateRequest(
       FORMATS.OPENAI,

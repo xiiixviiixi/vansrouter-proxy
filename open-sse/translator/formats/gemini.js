@@ -30,7 +30,14 @@ export const UNSUPPORTED_SCHEMA_CONSTRAINTS = [
   "title", "optional", "deprecated", "if", "then", "else", "contentMediaType", "contentEncoding",
   // UI/Styling properties (from Cursor tools - NOT JSON Schema standard)
   "cornerRadius", "fillColor", "fontFamily", "fontSize", "fontWeight",
-  "gap", "padding", "strokeColor", "strokeThickness", "textColor"
+  "gap", "padding", "strokeColor", "strokeThickness", "textColor",
+  // Non-standard annotation/error keywords used by some MCP tool schemas (#4283).
+  // Gemini's schema proto has no field for these and rejects the whole request with
+  // "Unknown name X: Cannot find field" if any nested schema node carries them.
+  "errorMessage", "errorMessages", "x-errorMessage", "x-errorMessages",
+  "markdownDescription", "x-intellij-html-description",
+  "x-taplo-info", "x-taplo", "doNotSuggest", "suggestSortText",
+  "minProperties", "maxProperties"
 ];
 
 // Default safety settings
@@ -308,6 +315,16 @@ function ensureObjectType(obj) {
   for (const v of Object.values(obj)) if (v && typeof v === "object") ensureObjectType(v);
 }
 
+// Gemini rejects an array-typed node with no `items`:
+//   ...properties[where].items.items: missing field
+// Clients nest arrays freely, so fill the innermost gap. string is the safe
+// default — it never rejects a value the client would have sent.
+function ensureArrayItems(obj) {
+  if (!obj || typeof obj !== "object") return;
+  if (obj.type === "array" && !obj.items) obj.items = { type: "string" };
+  for (const v of Object.values(obj)) if (v && typeof v === "object") ensureArrayItems(v);
+}
+
 // Clean JSON Schema for Antigravity API compatibility - removes unsupported keywords recursively
 export function cleanJSONSchemaForAntigravity(schema) {
   if (!schema || typeof schema !== "object") return schema;
@@ -324,8 +341,10 @@ export function cleanJSONSchemaForAntigravity(schema) {
   flattenAnyOfOneOf(cleaned);
   flattenTypeArrays(cleaned);
 
-  // Phase 2.5: Infer missing type=object when properties exist (Gemini requirement)
+  // Phase 2.5: Infer missing type=object when properties exist, and missing
+  // items on arrays (both are Gemini requirements, issue #144)
   ensureObjectType(cleaned);
+  ensureArrayItems(cleaned);
 
   // Phase 3: Remove all unsupported keywords at ALL levels (including inside arrays)
   removeUnsupportedKeywords(cleaned, UNSUPPORTED_SCHEMA_CONSTRAINTS);
@@ -397,7 +416,7 @@ export function cleanJSONSchemaForAntigravity(schema) {
   return cleaned;
 }
 
-// Merge adjacent same-role messages, strip empty parts, ensure initial user turn
+// Merge adjacent same-role messages, strip empty parts, ensure initial and terminal user turns
 export function normalizeGeminiContents(contents) {
   const out = [];
   for (const c of contents || []) {
@@ -410,6 +429,23 @@ export function normalizeGeminiContents(contents) {
   }
   if (out.length > 0 && out[0].role !== "user") {
     out.unshift({ role: "user", parts: [{ text: "..." }] });
+  }
+  if (out.length > 0 && out.at(-1).role === "model") {
+    const fnCalls = (out.at(-1).parts || []).filter(p => p && p.functionCall);
+    if (fnCalls.length > 0) {
+      const responses = fnCalls.map(p => {
+        const call = p.functionCall || {};
+        const fr = {
+          name: call.name || "tool",
+          response: { result: "Continue." }
+        };
+        if (call.id) fr.id = call.id;
+        return { functionResponse: fr };
+      });
+      out.push({ role: "user", parts: responses });
+    } else {
+      out.push({ role: "user", parts: [{ text: "Continue." }] });
+    }
   }
   return out;
 }

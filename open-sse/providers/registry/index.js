@@ -149,7 +149,23 @@ import p146 from "./selfhosted-stt.js";
 import p147 from "./selfhosted-tts.js";
 import p148 from "./qoder-cn.js";
 import p149 from "./tokenharbor.js";
+import p150 from "./meta.js";
+import p151 from "./hive.js";
+import p152 from "./dahl.js";
+import p153 from "./atria.js";
+import p154 from "./agnes.js";
+import p155 from "./bai.js";
+import p156 from "./tinyfish.js";
+import p157 from "./muse.js";
+import p158 from "./v1m.js";
 
+// Auto-generated: static imports for all registry entries
+import p68z from "./opencode-zen.js";
+// Temporarily hidden — no tool calling support (trae SOLO agent / windsurf gRPC skip ToolCallChunk).
+// Re-enable by uncommenting both the import and the array entry below.
+// import p102 from "./trae.js";
+// import p114 from "./devin-cli.js";
+// import p104 from "./windsurf.js";
 export default [
   p0,
   p1,
@@ -301,5 +317,14 @@ export default [
   p146,
   p147,
   p148,
-  p149
+  p149,
+  p150,
+  p151,
+  p152,
+  p153,
+  p154,
+  p155,
+  p156,
+  p157,
+  p158
 ];

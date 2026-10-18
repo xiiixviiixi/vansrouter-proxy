@@ -15,6 +15,8 @@ export default {
     deprecationNotice: "RISK_NOTICE",
   },
   category: "oauth",
+  hasFree: true,
+  freeRefresh: "monthly",
   transport: {
     baseUrl: "https://api.githubcopilot.com/chat/completions",
     responsesUrl: "https://api.githubcopilot.com/responses",

@@ -15,6 +15,7 @@ export default {
     },
   },
   category: "free",
+  hasFree: true,
   authType: "none",
   noAuth: true,
   authModes: ["none"],

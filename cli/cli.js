@@ -80,13 +80,8 @@ if (args[0] === "xai" && args[1] === "video") {
   return;
 }
 
-// Self-heal SQLite runtime deps (sql.js + better-sqlite3) into ~/.9router/runtime
-// so the server can resolve them via NODE_PATH. Best-effort — sql.js is required,
-// better-sqlite3 is optional. Logs to stderr only on failure.
-try { ensureSqliteRuntime({ silent: true }); } catch {}
-
-// Self-heal tray runtime (systray for macOS/Linux only). Windows skipped.
-try { ensureTrayRuntime({ silent: true }); } catch {}
+// Runtime provisioning is deliberately deferred until after argument parsing.
+// `--help` and `--version` must remain side-effect free and must not invoke npm.
 
 // Configuration constants
 const APP_NAME = pkg.name; // Use from package.json
@@ -154,6 +149,8 @@ Options:
   -v, --version       Show version
 
 Commands:
+  connect <server-url> Configure Claude Code for a remote 9router server
+                      (npx 9router connect http://host:20128 — no install needed)
   xai video --prompt "..." --output video.mp4
                       Generate a Grok Imagine video via the running gateway
                       (see: ${APP_NAME} xai video --help)
@@ -169,6 +166,16 @@ Commands:
 if (skipUpdate && !trayMode && !process.stdin.isTTY) {
   trayMode = true;
   process.env.TRAY_MODE = "1";
+}
+
+// Self-heal SQLite runtime deps into the user-writable runtime directory.
+// Native better-sqlite3 is optional; the bundled sql.js fallback is required.
+try { ensureSqliteRuntime({ silent: true }); } catch {}
+
+// The tray is an optional feature. Do not install its native runtime for
+// ordinary headless/server launches.
+if (trayMode) {
+  try { ensureTrayRuntime({ silent: true }); } catch {}
 }
 
 // Always use Node.js runtime with absolute path
@@ -187,6 +194,8 @@ function compareVersions(a, b) {
 
 // Get app data dir (matches app/src/lib/dataDir.js convention)
 function getAppDataDir() {
+  const configured = (process.env.DATA_DIR || "").trim();
+  if (configured && !(process.platform === "win32" && /^\//.test(configured))) return configured;
   return process.platform === "win32"
     ? path.join(process.env.APPDATA || "", "9router")
     : path.join(os.homedir(), ".9router");
@@ -601,7 +610,14 @@ function startServer(updatePromise) {
   // Surface real network exposure when bound to all interfaces (default 0.0.0.0).
   if (host === DEFAULT_HOST) {
     const lanIp = getLanIp();
-    if (lanIp) console.log(`\x1b[33m⚠ Network-exposed: reachable at http://${lanIp}:${port} (bound 0.0.0.0). Use --host 127.0.0.1 for local-only.\x1b[0m`);
+    if (lanIp) {
+      console.log(`\x1b[33m⚠ Network-exposed: reachable at http://${lanIp}:${port} (bound 0.0.0.0). Use --host 127.0.0.1 for local-only.\x1b[0m`);
+      // Remote login with the default password gets a change-password grant, not a
+      // 403 — so a LAN peer who guesses it takes the instance over.
+      // Mirrors src/lib/auth/password.js (separate process, cannot import it).
+      const initialPassword = (process.env.INITIAL_PASSWORD || "").trim() || "123456";
+      console.log(`\x1b[31m  Until you change it, anyone on this network who tries "${initialPassword}" can change the password and take over this router.\x1b[0m`);
+    }
   }
 
   let restartCount = 0;

@@ -23,7 +23,8 @@ const LIMIT_TOLERANCE = 0.1;
 // name. Both halves of the catalog are stored against the local id, so this runs
 // while building rather than on every lookup. Providers absent here keep whatever
 // the local pattern table resolves; names that already match need no entry.
-const PROVIDER_ALIASES = {
+export const PROVIDER_ALIASES = {
+  "github": "github-copilot",
   "glm": "zai",
   "glm-cn": "zhipuai",
   "claude": "anthropic",

@@ -18,7 +18,7 @@ function looksLikeSmokeDataDir(configured) {
   // Explicit smoke-test directories used by CI / local smoke scripts.
   if (normalized.includes("smoke")) return true;
   if (/^\/tmp\/9router-data-/.test(normalized)) return true;
-  // macOS sandbox temp paths are never intended for persistent DB storage.
+  // macOS puts its per-user temp root here, so it is the same hazard as /tmp.
   if (process.platform === "darwin" && normalized.includes("/var/folders/")) return true;
   return false;
 }
@@ -39,7 +39,9 @@ export function getDataDir() {
   // Prevent production/PM2 deployments from accidentally using a smoke-test or
   // temp directory as the persistent data store. A temp DATA_DIR means the DB
   // appears "empty" after reboot/cleanup and real data in ~/.9router is ignored.
-  if (looksLikeSmokeDataDir(configured)) {
+  // A caller that knows the directory is disposable opts out with "1", the same
+  // spelling every other boolean flag in this codebase uses.
+  if (looksLikeSmokeDataDir(configured) && process.env.DATA_DIR_ALLOW_TEMP !== "1") {
     const fallback = defaultDir();
     if (isProductionLike()) {
       console.warn(

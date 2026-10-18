@@ -17,6 +17,8 @@ export default {
     deprecationNotice: "RISK_NOTICE",
   },
   category: "oauth",
+  hasFree: true,
+  freeRefresh: "weekly",
   serviceKinds: ["llm", "image", "webSearch"],
   transport: {
     baseUrls: [

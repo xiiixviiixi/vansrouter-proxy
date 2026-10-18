@@ -1,6 +1,6 @@
 # Migration Guide: 9Router → VansRouter
 
-This guide covers migrating an existing **9Router** (decolua/9router) installation to **VansRouter** with zero downtime and full data preservation.
+This guide covers migrating an existing **9Router** (Vanszs/VansRouter) installation to **VansRouter** with zero downtime and full data preservation.
 
 ## What migrates
 
@@ -18,7 +18,7 @@ VansRouter auto-detects the legacy schema and upgrades it on first start.
 
 - Docker installed
 - 9Router running (any version) with data at `~/.9router/`
-- VansRouter Docker image: `ghcr.io/vanszs/vansrouter:latest`
+- VansRouter Docker image: `ghcr.io/vanszs/vansrouter:X.Y.Z` (replace with the release you are installing)
 
 ## Step 1: Backup
 
@@ -41,16 +41,14 @@ Keep the container (don't `docker rm`) — it serves as your rollback option.
 ## Step 3: Prepare VansRouter data directory
 
 ```bash
-# Create VansRouter data directory
-mkdir -p ~/.vansrouter/
+# Keep the existing canonical data directory. VansRouter deliberately preserves
+# the ~/.9router path for compatibility; do not create a second database tree.
+mkdir -p ~/.9router/
 
-# Copy data from 9Router
-cp -r ~/.9router/db ~/.vansrouter/db
-cp ~/.9router/jwt-secret ~/.vansrouter/jwt-secret
-cp ~/.9router/machine-id ~/.vansrouter/machine-id
-cp -r ~/.9router/auth ~/.vansrouter/auth
-cp -r ~/.9router/mitm ~/.vansrouter/mitm 2>/dev/null || true
-cp -r ~/.9router/runtime ~/.vansrouter/runtime 2>/dev/null || true
+# If the legacy files are already in ~/.9router, no copy is needed.
+# The following is only for a separately backed-up legacy directory:
+# cp -r /path/to/legacy/db ~/.9router/db
+# cp /path/to/legacy/jwt-secret ~/.9router/jwt-secret
 ```
 
 ## Step 4: Start VansRouter
@@ -60,29 +58,54 @@ cp -r ~/.9router/runtime ~/.vansrouter/runtime 2>/dev/null || true
 ```bash
 # Copy environment template
 cp .env.example .env
-nano .env  # Set JWT_SECRET to match ~/.9router/jwt-secret
+nano .env  # Set VANSROUTER_VERSION; INITIAL_PASSWORD may use the 123456 default
+
+# Compose uses the canonical named volume by default. To reuse ~/.9router,
+# create this override before starting so the host data is actually mounted:
+cat > docker-compose.override.yml <<'YAML'
+services:
+  vansrouter:
+    volumes:
+      - ${HOME}/.9router:/app/data
+YAML
+
+# Check legacy image references and data-root assumptions
+pnpm preflight:upgrade -- --env-file .env --compose-file docker-compose.yml
 
 # Start
 docker compose up -d
 ```
 
+Do not remove the read-only `vansrouter-data:/migration-data` mount until the
+new container has been verified.
+
 ### Option B: Docker run
 
 ```bash
 # Read your existing JWT secret
-JWT_SECRET=$(cat ~/.vansrouter/jwt-secret)
+JWT_SECRET=$(cat ~/.9router/jwt-secret)
 
 docker run -d --name vansrouter --restart unless-stopped \
   -p 20128:20128 \
-  -v ~/.vansrouter:/app/data \
+  -v ~/.9router:/app/data \
   -e PORT=20128 \
   -e HOSTNAME=0.0.0.0 \
   -e NODE_ENV=production \
   -e DATA_DIR=/app/data \
   -e JWT_SECRET="$JWT_SECRET" \
   -e API_KEY_SECRET="$JWT_SECRET" \
+  -e INITIAL_PASSWORD="$(openssl rand -base64 24)" \
   -e REQUIRE_API_KEY=false \
-  ghcr.io/vanszs/vansrouter:latest
+  ghcr.io/vanszs/vansrouter:X.Y.Z
+```
+
+If the existing native/PM2 deployment uses `/var/lib/9router`, keep that root
+and make it explicit in the shell before deployment; the preflight refuses an
+implicit shell/PM2 mismatch:
+
+```bash
+DATA_DIR=/var/lib/9router node scripts/preflight-upgrade.cjs \
+  --env-file .env --compose-file docker-compose.yml --pm2
 ```
 
 ## Step 5: Verify
@@ -91,8 +114,8 @@ docker run -d --name vansrouter --restart unless-stopped \
 # Container running?
 docker ps --filter name=vansrouter
 
-# Dashboard accessible?
-curl -s -o /dev/null -w "%{http_code}" http://localhost:20128/
+# Dashboard login page?
+curl -s -o /dev/null -w "%{http_code}" http://localhost:20128/masuk
 # Expected: 200
 
 # Check migration logs
@@ -100,11 +123,11 @@ docker logs vansrouter | grep -E "migrate|backup"
 # Expected: [DB][migrate] App 0.5.x → 0.8.6 | schema 1 → 3 | backup: ...
 
 # API responds?
-API_KEY=$(sqlite3 ~/.vansrouter/db/data.sqlite "SELECT key FROM apiKeys WHERE isActive=1;")
+API_KEY=$(sqlite3 ~/.9router/db/data.sqlite "SELECT key FROM apiKeys WHERE isActive=1;")
 curl -s -H "Authorization: Bearer $API_KEY" http://localhost:20128/v1/models | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Models: {len(d.get(\"data\",[]))}')"
 ```
 
-Open the dashboard at `http://localhost:20128` and verify:
+Open the dashboard at `http://localhost:20128/masuk` and verify:
 - All combos appear with correct model lists
 - Provider connections show correct status
 - Usage history is intact
@@ -139,7 +162,7 @@ docker rm vansrouter
 docker start 9router
 ```
 
-Your original data in `~/.9router/` is untouched. VansRouter data lives in `~/.vansrouter/`.
+Your original data in `~/.9router/` remains the canonical VansRouter data directory; no second data tree is created.
 
 ## Schema changes during migration
 
@@ -151,12 +174,12 @@ VansRouter applies these automatic migrations on first start:
 | 002-fix-empty-allowed-lists | Convert empty ACL arrays `[]` to NULL (unrestricted) |
 | 003-add-allowed-lists-columns | Add `allowedProviders`, `allowedCombos`, `allowedKinds` columns |
 
-A backup is automatically created at `~/.vansrouter/db/backups/` before migration runs.
+A backup is automatically created at `~/.9router/db/backups/` before migration runs.
 
 ## Differences from 9Router
 
-- **Image**: `ghcr.io/vanszs/vansrouter` (not `decolua/9router`)
-- **Data dir**: `~/.vansrouter/` recommended (not `~/.9router/`)
+- **Image**: `ghcr.io/vanszs/vansrouter` (not `Vanszs/VansRouter`)
+- **Data dir**: `~/.9router/` remains canonical for compatibility
 - **Headroom**: Optional sidecar for tool-history safety (not bundled)
 - **Circuit breaker**: Built-in provider failure tracking (inspired by OmniRoute)
 - **Active development**: Regular updates from upstream 9Router + community

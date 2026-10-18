@@ -24,6 +24,7 @@ const freebuffRegistry = {
   id: "freebuff",
   priority: 45,
   hasFree: true,
+  freeRefresh: "daily",
   alias: "fb",
   uiAlias: "fb",
   display: {

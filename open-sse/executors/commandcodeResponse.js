@@ -51,7 +51,7 @@ export async function inspectAndWrapCommandCodeResponse(originalResponse, model)
   const reader = originalResponse.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  const bufferedLines = [];
+  const rawChunks = [];
   let detectedError = null;
 
   try {
@@ -64,12 +64,14 @@ export async function inspectAndWrapCommandCodeResponse(originalResponse, model)
             const jsonStr = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
             const parsed = JSON.parse(jsonStr);
             if (parsed?.type === "error") detectedError = parsed;
-            else bufferedLines.push(trimmed);
-          } catch { bufferedLines.push(trimmed); }
+          } catch { /* ignore */ }
         }
         break;
       }
 
+      // Replay raw bytes rather than re-joined lines: re-encoding dropped the tail
+      // line whenever the upstream closed without a trailing newline.
+      rawChunks.push(value);
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
@@ -78,11 +80,10 @@ export async function inspectAndWrapCommandCodeResponse(originalResponse, model)
         const trimmed = line.trim();
         if (!trimmed) continue;
         const jsonStr = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
-        if (!jsonStr || jsonStr === "[DONE]") { bufferedLines.push(trimmed); stopLoop = true; break; }
+        if (!jsonStr || jsonStr === "[DONE]") { stopLoop = true; break; }
         let event;
-        try { event = JSON.parse(jsonStr); } catch { bufferedLines.push(trimmed); continue; }
+        try { event = JSON.parse(jsonStr); } catch { continue; }
         if (event?.type === "error") { detectedError = event; stopLoop = true; break; }
-        bufferedLines.push(trimmed);
         if (["text-delta", "reasoning-delta", "tool-input-start", "tool-call", "finish", "finish-step"].includes(event?.type)) {
           stopLoop = true; break;
         }
@@ -104,21 +105,16 @@ export async function inspectAndWrapCommandCodeResponse(originalResponse, model)
     });
   }
 
-  return wrapNdjsonAsOpenAISse(createReplayedStream(bufferedLines, buffer, reader), model, originalResponse);
+  return wrapNdjsonAsOpenAISse(createRawReplayedStream(rawChunks, reader), model, originalResponse);
 }
 
-function createReplayedStream(bufferedLines, remainingBuffer, reader) {
-  const encoder = new TextEncoder();
-  let replayed = false;
+function createRawReplayedStream(rawChunks, reader) {
+  let chunkIndex = 0;
   return new ReadableStream({
     async pull(controller) {
-      if (!replayed) {
-        replayed = true;
-        let prefix = bufferedLines.join("\n");
-        if (prefix && remainingBuffer) prefix += "\n" + remainingBuffer;
-        else if (remainingBuffer) prefix = remainingBuffer;
-        else if (prefix) prefix += "\n";
-        if (prefix) controller.enqueue(encoder.encode(prefix));
+      if (chunkIndex < rawChunks.length) {
+        controller.enqueue(rawChunks[chunkIndex++]);
+        return;
       }
       try {
         const { value, done } = await reader.read();

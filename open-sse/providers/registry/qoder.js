@@ -13,6 +13,7 @@ export default {
     },
   },
   category: "oauth",
+  hasFree: true,
   authModes: ["oauth", "apikey"],
   hasOAuth: true,
   authHint: "Personal Access Token (pt-...) from https://qoder.com/account/integrations",

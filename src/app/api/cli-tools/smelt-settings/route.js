@@ -1,25 +1,60 @@
 "use server";
 
 import { NextResponse } from "next/server";
+import { resolveCliApiKey } from "../resolveApiKey.js";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
-import { probeCliInstalled, readJsoncFile } from "../_shared/cliConfig.js";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const getSmeltConfigPath = () => path.join(os.homedir(), ".smelt", "config.json");
 const getSmeltDir = () => path.dirname(getSmeltConfigPath());
 
-const checkSmeltInstalled = () => probeCliInstalled("smelt", [getSmeltConfigPath()]);
-const readConfig = () => readJsoncFile(getSmeltConfigPath());
+const checkSmeltInstalled = async () => {
+  const isWindows = os.platform() === "win32";
+  try {
+    const command = isWindows ? "where smelt" : "which smelt";
+    await execAsync(command, { windowsHide: true });
+    return true;
+  } catch {
+    try {
+      await fs.access(getSmeltConfigPath());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+};
 
-const has9RouterConfig = (config) =>
-  config?._managedBy === "9router" || Boolean(config?.baseUrl?.includes("20128"));
+const has9RouterConfig = (settings) => {
+  if (!settings) return false;
+  return (
+    settings._managedBy === "9router" ||
+    (typeof settings.baseUrl === "string" && settings.baseUrl.length > 0 && settings.baseUrl.includes("20128"))
+  );
+};
+
+const readConfig = async () => {
+  try {
+    const content = await fs.readFile(getSmeltConfigPath(), "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+};
 
 export async function GET() {
   try {
     const installed = await checkSmeltInstalled();
     if (!installed) {
-      return NextResponse.json({ installed: false, config: null, message: "Smelt CLI is not installed" });
+      return NextResponse.json({
+        installed: false,
+        config: null,
+        message: "Smelt CLI is not installed",
+      });
     }
 
     const config = await readConfig();
@@ -30,22 +65,21 @@ export async function GET() {
       has9Router: has9RouterConfig(config),
       configPath: getSmeltConfigPath(),
     });
-  } catch (error) {
-    console.log("Error checking smelt settings:", error);
-    return NextResponse.json({ error: { message: "Failed to check smelt settings" } }, { status: 500 });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function POST(request) {
-  let body;
+  let rawBody;
   try {
-    body = await request.json();
+    rawBody = await request.json();
   } catch {
     return NextResponse.json({ error: { message: "Invalid JSON body" } }, { status: 400 });
   }
 
   try {
-    const { baseUrl, apiKey, model } = body || {};
+    const { baseUrl, apiKey, model } = rawBody || {};
     if (!baseUrl) {
       return NextResponse.json({ error: { message: "baseUrl is required" } }, { status: 400 });
     }
@@ -53,29 +87,41 @@ export async function POST(request) {
     const configPath = getSmeltConfigPath();
     await fs.mkdir(getSmeltDir(), { recursive: true });
 
-    const existing = (await readConfig()) || {};
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = JSON.parse(raw);
+    } catch {}
+
+    const normalizedBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
     const updated = {
       ...existing,
-      baseUrl: baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`,
-      apiKey: apiKey || "sk_9router",
+      baseUrl: normalizedBaseUrl,
+      apiKey: await resolveCliApiKey(apiKey),
       model: model || existing.model || "provider/model-id",
       _managedBy: "9router",
     };
 
     await fs.writeFile(configPath, JSON.stringify(updated, null, 2), "utf-8");
 
-    return NextResponse.json({ success: true, message: "Smelt settings applied successfully!", configPath });
-  } catch (error) {
-    console.log("Error updating smelt settings:", error);
-    return NextResponse.json({ error: { message: "Failed to update smelt settings" } }, { status: 500 });
+    return NextResponse.json({
+      success: true,
+      message: "Smelt settings applied successfully!",
+      configPath,
+    });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }
 
 export async function DELETE() {
   try {
     const configPath = getSmeltConfigPath();
-    const existing = await readConfig();
-    if (!existing) {
+    let existing = {};
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      existing = JSON.parse(raw);
+    } catch {
       return NextResponse.json({ success: true, message: "No config file to reset" });
     }
 
@@ -90,9 +136,8 @@ export async function DELETE() {
       await fs.writeFile(configPath, JSON.stringify(existing, null, 2), "utf-8");
     }
 
-    return NextResponse.json({ success: true, message: "9Router removed from Smelt" });
-  } catch (error) {
-    console.log("Error resetting smelt settings:", error);
-    return NextResponse.json({ error: { message: "Failed to reset smelt settings" } }, { status: 500 });
+    return NextResponse.json({ success: true, message: "Smelt 9Router settings removed" });
+  } catch (err) {
+    return NextResponse.json({ error: { message: err.message } }, { status: 500 });
   }
 }

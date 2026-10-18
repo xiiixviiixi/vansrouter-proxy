@@ -1,5 +1,6 @@
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS, getModelKind } from "@/shared/constants/models";
 import {
+  ALIAS_TO_ID,
   AI_PROVIDERS,
   FREE_PROVIDERS,
   getProviderAlias,
@@ -27,6 +28,7 @@ import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel } from "open-sse/providers/capabilities.js";
 import { aggregateComboCapabilities } from "open-sse/services/combo.js";
 import { guardedFetch } from "@/shared/utils/ssrfGuard.js";
+import { ANTHROPIC_API_VERSION } from "open-sse/providers/shared.js";
 
 const UPSTREAM_CONNECTION_RE = /[-_][0-9a-f]{8,}$/i;
 const LLM_KIND = "llm";
@@ -214,6 +216,61 @@ function comboMatchesKinds(combo, kindFilter) {
   return kindFilter.has(kind);
 }
 
+// Combo seats use UI aliases; the model registry also has transport aliases.
+// Capability overrides and catalog limits are keyed by provider id.
+const ALIAS_TO_PROVIDER_ID = {
+  ...Object.fromEntries(
+    Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
+  ),
+  ...ALIAS_TO_ID,
+};
+
+function comboSeatCapabilities(seat) {
+  const slash = seat.indexOf("/");
+  if (slash <= 0) return null;
+  const alias = seat.slice(0, slash);
+  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, seat.slice(slash + 1));
+}
+
+// Nested combo names are valid seats — the model selector exposes them and
+// chat routing resolves them recursively — but a no-slash seat is otherwise
+// treated as a literal model and publishes the 200k floor. Expand nested
+// names (cycle-guarded) so the published window is the true min across the
+// whole chain.
+function comboSeatLimits(combo, combosByName, visiting = new Set()) {
+  const name = typeof combo?.name === "string" ? combo.name : null;
+  if (name) {
+    if (visiting.has(name)) return { contextWindow: undefined, maxOutput: undefined };
+    visiting.add(name);
+  }
+  let contextWindow = Infinity;
+  let maxOutput = Infinity;
+  try {
+    for (const seat of Array.isArray(combo?.models) ? combo.models : []) {
+      if (typeof seat !== "string") continue;
+      const slash = seat.indexOf("/");
+      if (slash <= 0) {
+        const nested = combosByName.get(seat);
+        if (nested) {
+          const nestedLimits = comboSeatLimits(nested, combosByName, visiting);
+          if (Number.isFinite(nestedLimits.contextWindow)) contextWindow = Math.min(contextWindow, nestedLimits.contextWindow);
+          if (Number.isFinite(nestedLimits.maxOutput)) maxOutput = Math.min(maxOutput, nestedLimits.maxOutput);
+          continue;
+        }
+      }
+      const caps = comboSeatCapabilities(seat) || getCapabilitiesForModel(null, seat);
+      if (Number.isFinite(caps?.contextWindow)) contextWindow = Math.min(contextWindow, caps.contextWindow);
+      if (Number.isFinite(caps?.maxOutput)) maxOutput = Math.min(maxOutput, caps.maxOutput);
+    }
+  } finally {
+    if (name) visiting.delete(name);
+  }
+  return {
+    contextWindow: Number.isFinite(contextWindow) ? contextWindow : undefined,
+    maxOutput: Number.isFinite(maxOutput) ? maxOutput : undefined,
+  };
+}
+
 let _modelsFetcherCache = {};
 let _modelsFetcherCacheExpiry = {};
 const MODELS_FETCHER_CACHE_TTL_MS = 300000;
@@ -321,7 +378,7 @@ async function fetchCompatibleModelIds(connection) {
       url = `${url.slice(0, -9)}/models`;
     }
     headers["x-api-key"] = connection.apiKey;
-    headers["anthropic-version"] = "2023-06-01";
+    headers["anthropic-version"] = ANTHROPIC_API_VERSION;
     headers.Authorization = `Bearer ${connection.apiKey}`;
   } else {
     return [];
@@ -392,6 +449,11 @@ async function buildAllModelEntries(kindFilter, combos, customModels, modelAlias
   const entries = [];
 
   const comboByName = Object.fromEntries(combos.map((c) => [c.name, c.models]));
+  // Nested combo names are valid seats; keep the records (not just the member
+  // lists) so comboSeatLimits can expand them.
+  const combosByName = new Map(
+    combos.filter((c) => typeof c?.name === "string").map((c) => [c.name, c]),
+  );
 
   for (const combo of combos) {
     if (!comboMatchesKinds(combo, kindFilter)) continue;
@@ -399,8 +461,15 @@ async function buildAllModelEntries(kindFilter, combos, customModels, modelAlias
     if (combo.kind === "webSearch" || combo.kind === "webFetch") {
       entry.kind = combo.kind;
     } else {
-      const comboCaps = aggregateComboCapabilities(combo.models, comboByName);
+      const comboCaps = aggregateComboCapabilities(combo.models, comboByName, comboSeatCapabilities);
       if (comboCaps) entry.capabilities = comboCaps;
+      // Any seat can serve the request, so the only window a combo can promise is
+      // its smallest. Combo entries were the only models on this endpoint that
+      // published no limits at all, which leaves a client to guess from the name —
+      // and it guesses high (see the snake_case note on the per-provider path).
+      const { contextWindow, maxOutput } = comboSeatLimits(combo, combosByName);
+      if (Number.isFinite(contextWindow)) entry.context_length = contextWindow;
+      if (Number.isFinite(maxOutput)) entry.max_completion_tokens = maxOutput;
     }
     entries.push(entry);
   }

@@ -5,8 +5,9 @@ import { getMeta, setMeta } from "../helpers/metaStore.js";
 
 function maskApiKey(key) {
   if (!key || typeof key !== "string") return null;
-  if (key.length <= 8) return key.charAt(0) + "***";
-  return key.slice(0, 8) + "***";
+  if (key.length <= 12) return key.charAt(0) + "***";
+  // Keep the tail: keys sharing a machine-id prefix (team keys) must not collide.
+  return key.slice(0, 8) + "***" + key.slice(-4);
 }
 
 const PENDING_TIMEOUT_MS = 60 * 1000;
@@ -195,6 +196,15 @@ export function trackPendingRequest(model, provider, connectionId, started, erro
   scheduleStatsEvent("pending");
 }
 
+function getPendingSnapshot() {
+  return {
+    byModel: { ...pendingRequests.byModel },
+    byAccount: Object.fromEntries(
+      Object.entries(pendingRequests.byAccount).map(([connectionId, models]) => [connectionId, { ...models }]),
+    ),
+  };
+}
+
 export async function getActiveRequests() {
   const activeRequests = [];
   const connectionMap = await getConnectionMapCached();
@@ -237,7 +247,7 @@ export async function getActiveRequests() {
     .slice(0, 20);
 
   const errorProvider = (Date.now() - lastErrorProvider.ts < 10000) ? lastErrorProvider.provider : "";
-  return { activeRequests, recentRequests, errorProvider };
+  return { activeRequests, recentRequests, errorProvider, pending: getPendingSnapshot() };
 }
 
 export async function saveRequestUsage(entry) {
@@ -561,8 +571,9 @@ export async function getUsageStats(period = "all") {
         if (stats.byAccount[accountKey] && new Date(ts) > new Date(stats.byAccount[accountKey].lastUsed)) stats.byAccount[accountKey].lastUsed = ts;
       }
 
+      // Must match the byApiKey key built above (masked, not raw) or the overlay misses.
       const apiKeyKey = (e.apiKey && typeof e.apiKey === "string")
-        ? `${e.apiKey}|${e.model}|${e.provider || "unknown"}`
+        ? `${maskApiKey(e.apiKey)}|${e.model}|${e.provider || "unknown"}`
         : "local-no-key";
       if (stats.byApiKey[apiKeyKey] && new Date(ts) > new Date(stats.byApiKey[apiKeyKey].lastUsed)) stats.byApiKey[apiKeyKey].lastUsed = ts;
 
@@ -634,6 +645,11 @@ export async function getUsageStats(period = "all") {
         const keyInfo = apiKeyMap[r.apiKey];
         const keyName = keyInfo?.name || r.apiKey.slice(0, 8) + "...";
         const apiKeyMasked = maskApiKey(r.apiKey);
+        // Key by the MASKED key (first 8 + tail), not the raw key: VansRouter's
+        // AUDIT-002 requires no raw key in the response payload. Upstream keyed
+        // by the full key here only because the old mask kept 8 chars and every
+        // team key collided; the tail now keeps them distinct, so masking is
+        // sufficient. The lastUsed overlay below must build this key the same way.
         const akKey = `${apiKeyMasked}|${r.model}|${r.provider || "unknown"}`;
         if (!stats.byApiKey[akKey]) {
           stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKeyMasked, keyName, apiKeyKey: apiKeyMasked, lastUsed: r.timestamp };

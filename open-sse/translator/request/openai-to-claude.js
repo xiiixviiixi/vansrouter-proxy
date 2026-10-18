@@ -5,6 +5,7 @@ import { adjustMaxTokens } from "../formats/maxTokens.js";
 import { safeParseJSON } from "../concerns/json.js";
 import { parseDataUri } from "../concerns/image.js";
 import { extractTextContent } from "../formats/gemini.js";
+import { fitToolName, TOOL_NAME_MAX_LENGTH } from "../concerns/toolCall.js";
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 
@@ -16,6 +17,8 @@ const CLAUDE_OAUTH_TOOL_PREFIX = "";
 export function openaiToClaudeRequest(model, body, stream) {
   // Tool name mapping for Claude OAuth (capitalizedName → originalName)
   const toolNameMap = new Map();
+  const fittedToolNames = new Map();
+  const takenToolNames = new Set();
   // Cap max_tokens at the model's real output ceiling (e.g. Opus 4.8 = 128000),
   // not the conservative 64000 default — otherwise a high-output model is
   // pre-clamped here before prepareClaudeRequest's model-aware step runs.
@@ -165,7 +168,13 @@ Respond ONLY with the JSON object, no other text.`);
       const originalName = toolData.name;
 
       // Claude OAuth requires prefixed tool names to avoid conflicts
-      const toolName = CLAUDE_OAUTH_TOOL_PREFIX + originalName;
+      const toolName = fitToolName(
+        CLAUDE_OAUTH_TOOL_PREFIX + originalName,
+        TOOL_NAME_MAX_LENGTH,
+        takenToolNames,
+      );
+      takenToolNames.add(toolName);
+      if (toolName !== originalName) fittedToolNames.set(originalName, toolName);
 
       // Store mapping for response translation (prefixed → original)
       toolNameMap.set(toolName, originalName);
@@ -184,12 +193,17 @@ Respond ONLY with the JSON object, no other text.`);
 
   // Tool choice
   if (body.tool_choice) {
-    result.tool_choice = convertOpenAIToolChoice(body.tool_choice);
+    result.tool_choice = convertOpenAIToolChoice(body.tool_choice, fittedToolNames);
   }
 
   // Thinking is normalized centrally by applyThinking (thinkingUnified.js) after translation.
 
   // Attach toolNameMap to result for response translation
+  if (body._toolNameMap?.size) {
+    for (const [k, v] of body._toolNameMap) {
+      toolNameMap.set(k, v);
+    }
+  }
   if (toolNameMap.size > 0) {
     result._toolNameMap = toolNameMap;
   }
@@ -303,7 +317,7 @@ function getContentBlocksFromMessage(msg, toolNameMap = new Map()) {
 // unrecognized type through.
 const CLAUDE_TOOL_CHOICE_TYPES = new Set(["auto", "any", "tool", "none"]);
 
-function convertOpenAIToolChoice(choice) {
+function convertOpenAIToolChoice(choice, fittedToolNames) {
   if (!choice) return { type: "auto" };
 
   // OpenAI string forms: "auto" | "none" | "required"
@@ -317,7 +331,9 @@ function convertOpenAIToolChoice(choice) {
     // Checked before the native pass-through below, because the OpenAI shape
     // also carries a `.type` ("function") that Claude rejects.
     if (choice.function?.name) {
-      return { type: "tool", name: choice.function.name };
+      // A shortened tool_choice must name the tool actually declared above.
+      const name = fittedToolNames?.get(choice.function.name) || choice.function.name;
+      return { type: "tool", name };
     }
     // Already Claude-native — only pass through types Claude actually accepts,
     // so a malformed or unknown type can never leak into the upstream request.

@@ -58,7 +58,8 @@ describe("claude scoped weekly limits (limits[])", () => {
     expect(usage.quotas["session (5h)"].used).toBe(12);
     expect(Object.keys(usage.quotas)).not.toContain("weekly session (7d)");
     // Positive control: the OAuth usage payload is what fed the parse.
-    expect(proxyAwareFetch.mock.calls[0][0]).toBe(PROVIDERS.claude.usage.oauthUrl);
+    // cedar_ember=1 is what makes the response carry the limit-reset grant block.
+    expect(proxyAwareFetch.mock.calls[0][0]).toBe(`${PROVIDERS.claude.usage.oauthUrl}?cedar_ember=1`);
   });
 
   it("reaches the dashboard quota table as a remaining percentage", async () => {

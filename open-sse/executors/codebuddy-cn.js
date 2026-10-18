@@ -1,4 +1,10 @@
 import { DefaultExecutor } from "./default.js";
+import {
+  neutralizeCodeBuddyChannelIdentity,
+  compactOversizedTools,
+  captureRotatedToken,
+  parseCodeBuddyError,
+} from "./codebuddyShared.js";
 
 /**
  * CodeBuddyExecutor — talks to https://copilot.tencent.com/v2/chat/completions
@@ -12,6 +18,17 @@ import { DefaultExecutor } from "./default.js";
 export class CodeBuddyExecutor extends DefaultExecutor {
   constructor() {
     super("codebuddy-cn");
+  }
+
+  async execute(input) {
+    const result = await super.execute(input);
+    const resp = result instanceof Response ? result : result?.response;
+    captureRotatedToken(resp, input.credentials);
+    return result;
+  }
+
+  parseError(response, bodyText) {
+    return parseCodeBuddyError(response, bodyText);
   }
 
   transformRequest(model, body, stream, credentials) {
@@ -33,7 +50,45 @@ export class CodeBuddyExecutor extends DefaultExecutor {
     // No reasoning requested: leave both unset. Forcing reasoning_effort:"medium"
     // + reasoning_summary on plain requests makes CodeBuddy trip its content
     // filter and return an error (#2071).
+
+    // Neutralize third-party CLI identity markers (Claude Code, ZCode) to avoid 11128 WAF block
+    if (Array.isArray(transformed.messages)) {
+      transformed.messages = neutralizeCodeBuddyChannelIdentity(transformed.messages);
+    }
+
+    // Compact oversized tools if >64KB to avoid sensitive content rejection
+    if (Array.isArray(transformed.tools) && transformed.tools.length > 0) {
+      transformed.tools = compactOversizedTools(transformed.tools);
+    }
+
     return transformed;
+  }
+  parseError(response, bodyText) {
+    if (bodyText) {
+      try {
+        const data = JSON.parse(bodyText);
+        const msg = data?.msg || data?.message || data?.error?.message || "";
+        if (data?.code === 6004 || /超出频率限制|frequency limit|限额/i.test(msg)) {
+          let resetsAtMs = null;
+          const match = msg.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})(?:\s*UTC\+?([0-9:]+))?/i);
+          if (match) {
+            const dp = match[1];
+            const tp = match[2];
+            const tz = match[3]
+              ? (match[3].includes(":") ? (match[3].startsWith("+") ? match[3] : `+${match[3]}`) : `+${match[3].padStart(2, "0")}:00`)
+              : "+08:00";
+            const dt = new Date(`${dp}T${tp}${tz}`);
+            if (!isNaN(dt.getTime())) resetsAtMs = dt.getTime();
+          }
+          return {
+            status: 429,
+            message: msg || "CodeBuddy frequency limit (6004)",
+            resetsAtMs,
+          };
+        }
+      } catch {}
+    }
+    return super.parseError(response, bodyText);
   }
 }
 

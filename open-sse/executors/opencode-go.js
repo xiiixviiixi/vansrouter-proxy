@@ -6,6 +6,7 @@ import { applyAuth, BEARER_AUTH, XAPIKEY_AUTH } from "../providers/shared.js";
 import crypto from "node:crypto";
 import { resolveSessionId } from "../utils/sessionManager.js";
 import { baseModelId, normalizeOpencodeReasoning } from "../utils/opencodeIdentity.js";
+import { FORMATS } from "../translator/formats.js";
 
 // Legacy model routing remains for callers that do not provide runtimeTransport.
 const MESSAGES_FORMAT_MODELS = new Set([
@@ -50,12 +51,11 @@ function resolveOpencodeSession(body, credentials) {
   });
 }
 
-
 // Responses-only per the provider registry (grok-4.6, gpt-5.6-luna, muse-spark, …) —
 // never hardcode model ids here, config decides. getModelTargetFormat also strips the
-// thinking suffix, so "gpt-5.6-luna(high)" resolves to its base entry.
+// thinking suffix and applies the family fallback for passthrough ids.
 function isResponsesModel(model) {
-  return getModelTargetFormat("opencode-go", model) === "openai-responses";
+  return getModelTargetFormat("opencode-go", model) === FORMATS.OPENAI_RESPONSES;
 }
 
 
@@ -96,7 +96,7 @@ export class OpenCodeGoExecutor extends BaseExecutor {
         : `${BASE}/chat/completions`;
   }
 
-  buildHeaders(credentials, stream = true, model) {
+  buildHeaders(credentials, stream = true, url, model) {
     const runtimeTransport = credentials?.runtimeTransport;
     const effectiveModel = model || this._lastModel;
     const raw = Object.fromEntries(

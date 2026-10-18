@@ -1,16 +1,18 @@
-// Regression: duplicate reasoning markers for non-Claude models on
-// Claude-format transports (e.g. AgentRouter + GLM-5.2/GPT-5.5).
+// Regression: duplicate reasoning markers on Claude-format transports
+// (e.g. AgentRouter + GLM-5.2/GPT-5.5, and native Claude upstreams).
 //
-// Before this fix, claudeToOpenAIResponse emitted BOTH `reasoning_content`
-// deltas AND literal `<think>…</think>` content tags for the same thinking
-// block. OpenAI clients that already understand reasoning_content (e.g.
-// OpenCode) captured the field as `thought` but still received `<think>`
-// and `</think>` as plain content, leaking reasoning markers into the
-// chat surface. See .kimchi/docs/ferment-handoff.md Ferment 4 Phase 2.
+// claudeToOpenAIResponse used to emit BOTH `reasoning_content` deltas AND
+// literal `<think>…</think>` content tags for the same thinking block.
+// OpenAI clients that already understand reasoning_content (e.g. OpenCode)
+// captured the field as `thought` but still received `<think>` and
+// `</think>` as plain content, leaking reasoning markers into the chat
+// surface. See .kimchi/docs/ferment-handoff.md Ferment 4 Phase 2.
 //
-// Fix: only wrap thinking blocks with `<think>…</think>` for native Claude
-// models. For OpenAI-style reasoning models (anything not containing
-// "claude" in the model name), emit reasoning_content only.
+// History: this fork first fixed it partially, by wrapping only for native
+// Claude models. Upstream's 5d2cfbf3 then removed the markers entirely
+// (#3399, #4199) — the pair always arrived empty, since the thinking text
+// travels in reasoning_content — and that supersedes the gate here. No
+// `<think>` marker is emitted for any model now.
 import { describe, expect, it } from "vitest";
 import { claudeToOpenAIResponse } from "../../open-sse/translator/response/claude-to-openai.js";
 
@@ -70,7 +72,13 @@ describe("claude-to-openai: reasoning marker wrapping", () => {
     expect(stop).toBeNull();
   });
 
-  it("emits BOTH reasoning_content AND <think>/</think> for Claude models (backward compat)", () => {
+  it("emits reasoning_content but NO <think>/</think> for Claude models either", () => {
+    // Upstream #3399/#4199: the markers always arrived empty and adjacent to the
+    // reasoning_content that carried the actual text, so clients rendered a bare
+    // "<think></think>" above every answer. This fork previously kept them for
+    // Claude models "for backward compat"; upstream's fix supersedes that, and
+    // no information is lost because the thinking text itself travels in
+    // reasoning_content (asserted just below).
     const state = makeState("claude-opus-4-6");
 
     const start = claudeToOpenAIResponse({
@@ -78,9 +86,7 @@ describe("claude-to-openai: reasoning marker wrapping", () => {
       index: 0,
       content_block: { type: "thinking" }
     }, state);
-    expect(start).toHaveLength(1);
-    expect(start[0].choices[0].delta.content).toBe("<think>");
-    expect(start[0].choices[0].delta.reasoning_content).toBeUndefined();
+    expect(start).toBeNull();
 
     const delta = claudeToOpenAIResponse({
       type: "content_block_delta",
@@ -91,24 +97,19 @@ describe("claude-to-openai: reasoning marker wrapping", () => {
     expect(delta[0].choices[0].delta.content).toBeUndefined();
 
     const stop = claudeToOpenAIResponse({ type: "content_block_stop", index: 0 }, state);
-    expect(stop).toHaveLength(1);
-    expect(stop[0].choices[0].delta.content).toBe("</think>");
+    expect(stop).toBeNull();
   });
 
-  it("does not leak <think>/</think> as content for non-Claude even when model name has 'claude' substring mismatch", () => {
-    // Edge case: a model literally named "claude-replica-glm" should NOT
-    // get the wrapping because it's not actually a Claude model.
+  it("emits no markers for a model whose name merely contains 'claude'", () => {
+    // The old lowercase-includes("claude") heuristic made this case wrap. With
+    // markers gone entirely the heuristic is moot: nothing wraps, ever.
     const state = makeState("claude-replica-glm");
     const start = claudeToOpenAIResponse({
       type: "content_block_start",
       index: 0,
       content_block: { type: "thinking" }
     }, state);
-    // Heuristic: lowercase includes("claude") is true → still wraps.
-    // Documenting actual behavior; if this becomes a real problem, switch
-    // to capability-driven detection.
-    expect(start).toHaveLength(1);
-    expect(start[0].choices[0].delta.content).toBe("<think>");
+    expect(start).toBeNull();
   });
 
   it("tolerates missing state.model without throwing", () => {

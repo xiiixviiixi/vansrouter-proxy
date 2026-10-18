@@ -2,6 +2,7 @@ export default {
   id: "cloudflare-ai",
   priority: 60,
   hasFree: true,
+  freeRefresh: "daily",
   alias: "cloudflare-ai",
   aliases: [
     "cf",

@@ -1,4 +1,5 @@
 import { CLAUDE_CLI_SPOOF_HEADERS } from "../shared.js";
+import { ANTHROPIC_API_VERSION } from "../shared.js";
 
 export default {
   id: "claude",
@@ -22,10 +23,10 @@ export default {
     format: "claude",
     urlSuffix: "?beta=true",
     headers: {
-      "Anthropic-Version": "2023-06-01",
+      "Anthropic-Version": ANTHROPIC_API_VERSION,
       "Anthropic-Beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advanced-tool-use-2025-11-20,effort-2025-11-24,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28",
       "Anthropic-Dangerous-Direct-Browser-Access": "true",
-      "User-Agent": "claude-cli/2.1.92 (external, sdk-cli)",
+      "User-Agent": "claude-cli/2.1.280 (external, sdk-cli)",
       "X-App": "cli",
       "X-Stainless-Helper-Method": "stream",
       "X-Stainless-Retry-Count": "0",
@@ -57,6 +58,8 @@ export default {
       oauthUrl: "https://api.anthropic.com/api/oauth/usage",
       orgUrl: "https://api.anthropic.com/v1/organizations/{org_id}/usage",
       settingsUrl: "https://api.anthropic.com/v1/settings",
+      profileUrl: "https://api.anthropic.com/api/oauth/profile",
+      resetUrl: "https://api.anthropic.com/api/organizations/{org_id}/reset_rate_limits",
     },
   },
   models: [
@@ -73,6 +76,7 @@ export default {
     { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
     { id: "claude-fable-5-1", name: "Claude Fable 5.1" },
     { id: "claude-fable-5", name: "Claude Fable 5" },
+    { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
   ],
   oauth: {
     clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",

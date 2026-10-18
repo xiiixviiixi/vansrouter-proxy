@@ -1,6 +1,10 @@
 // Free OpenCode models that don't use the "-free" id suffix
 const KNOWN_FREE_OPENCODE_MODELS = ["big-pickle"];
 
+// No dead-model list: upstream's rejections are volatile and a hardcoded snapshot
+// cannot expire. A bad id fails loudly on use instead. (One existed; it hid two
+// live models and had an unreachable entry.)
+
 // NVIDIA NIM free-tier models whitelist.
 // This is statically defined to prevent Next.js standalone dependency-splitting failures
 // where the import of PROVIDERS from open-sse registry yields an empty object in production.
@@ -31,6 +35,13 @@ export const FILTERS = {
   "opencode-free": (models) =>
     models
       .filter((m) => m.id?.endsWith("-free") || KNOWN_FREE_OPENCODE_MODELS.includes(m.id))
+      .map((m) => ({ id: m.id, name: m.id })),
+
+  // Go subscription catalogue — every /models id is selectable; the endpoint lane
+  // per model is resolved by the family regex (see open-sse/providers/models/helpers.js)
+  "opencode-go": (models) =>
+    (Array.isArray(models) ? models : [])
+      .filter((m) => typeof m?.id === "string")
       .map((m) => ({ id: m.id, name: m.id })),
 
   // models.dev returns a large catalog; keep only mimo models

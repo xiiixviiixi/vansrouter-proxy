@@ -60,6 +60,12 @@ export async function resolveConnectionProxyConfig(
 
     const legacy = normalizeLegacyProxy(providerSpecificData);
 
+    // A strict pool must keep its guarantee even when the pool itself is not
+    // usable (inactive, or saved without a url). Otherwise the unusable-pool
+    // path below reports strictProxy:false and the request silently leaves
+    // over the direct IP — the leak strict mode exists to prevent (#4333).
+    let poolStrictProxy = false;
+
     /**
      * -----------------------------
      * Proxy Pool Resolution
@@ -75,6 +81,8 @@ export async function resolveConnectionProxyConfig(
         proxyPool &&
         proxyPool.isActive === true &&
         proxyUrl;
+
+      poolStrictProxy = proxyPool?.strictProxy === true;
 
       if (isValidPool) {
         /**
@@ -131,6 +139,8 @@ export async function resolveConnectionProxyConfig(
         proxyPoolId: selectedPoolId || null,
         proxyPool: null,
 
+        strictProxy: poolStrictProxy,
+
         ...legacy,
       };
     }
@@ -158,6 +168,8 @@ export async function resolveConnectionProxyConfig(
 
       proxyPoolId: proxyPoolId || null,
       proxyPool: null,
+
+      strictProxy: poolStrictProxy,
 
       ...legacy,
     };

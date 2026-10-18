@@ -14,6 +14,11 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/.claude/**", "**/.kilo/**", "**/.git/**", "**/dist/**", "**/all-endpoints-robust.test.js"],
     maxConcurrency: 10,
     testTimeout: 15000,
+    // Hooks re-import modules (vi.resetModules + dynamic import) and some suites
+    // spawn real child processes; the 10s default is not enough under 10-way
+    // parallelism, which showed up as flaky hook timeouts in xai-oauth-service
+    // and spawn races in devin-cli-executor.
+    hookTimeout: 30000,
     pool: "threads",
     // Suppress noisy console output from handlers under test
     silent: false,

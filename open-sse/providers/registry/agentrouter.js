@@ -21,6 +21,8 @@ export default {
     },
   },
   category: "freeTier",
+  hasFree: true,
+  freeRefresh: "one-time",
   authType: "apikey",
   hasOAuth: false,
   authModes: ["apikey"],

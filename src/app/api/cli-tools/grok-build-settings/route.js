@@ -1,5 +1,9 @@
+"use server";
+
 import { NextResponse } from "next/server";
-import { probeCliInstalled } from "../_shared/cliConfig.js";
+import { resolveCliApiKey } from "../resolveApiKey.js";
+import { exec } from "child_process";
+import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -11,11 +15,27 @@ import {
   resetGrokBuildConfig,
 } from "@/lib/grokBuildConfig";
 
+const execAsync = promisify(exec);
+
 const getGrokDir = () => path.join(os.homedir(), ".grok");
 const getGrokConfigPath = () => path.join(getGrokDir(), "config.toml");
 const getGrokBinPath = () => path.join(getGrokDir(), "bin", "grok");
 
-const checkGrokInstalled = () => probeCliInstalled("grok", [getGrokBinPath(), getGrokConfigPath()]);
+const checkGrokInstalled = async () => {
+  try {
+    const isWindows = os.platform() === "win32";
+    await execAsync(isWindows ? "where grok" : "which grok", { windowsHide: true });
+    return true;
+  } catch {
+    for (const candidate of [getGrokBinPath(), getGrokConfigPath()]) {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch { /* try next */ }
+    }
+    return false;
+  }
+};
 
 const readConfigToml = async () => {
   try {
@@ -89,7 +109,7 @@ export async function POST(request) {
     const normalizedBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
     const toml = applyGrokBuildConfig(await readConfigToml(), {
       baseUrl: normalizedBaseUrl,
-      apiKey: apiKey || "sk_9router",
+      apiKey: await resolveCliApiKey(apiKey),
       model: selectedModel,
       contextWindow: normalizeContextWindow(contextWindow, selectedModel),
       subagentModels: normalizeSubagentModels(subagentModels),

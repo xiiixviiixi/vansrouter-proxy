@@ -4,6 +4,7 @@ export default {
   id: "gemini-cli",
   priority: 20,
   hasFree: true,
+  freeRefresh: "daily",
   alias: "gc",
   uiAlias: "gc",
   display: {

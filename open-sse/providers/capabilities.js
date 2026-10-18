@@ -6,6 +6,20 @@
 //   3. PATTERN_CAPABILITIES                     — glob match, ordered specific -> generic
 //   4. DEFAULT_CAPABILITIES                     — safe floor (always returned)
 //
+
+// Two extra layers then refine the result:
+//   • the synced catalog — modalities keyed by model, limits keyed by provider
+//     + model, refreshed from models.dev in the background. It reads a file, so
+//     the server installs it via setCatalogSource(); this module stays free of
+//     node:fs because the dashboard bundles it into the browser too.
+//   • visionPatterns.js — name-based vision detection, last resort so a model
+//     nobody has catalogued yet still accepts images.
+// Modalities only ever turn a capability ON. Limits from the catalog overlay
+// the canonical exact entry (step 2) so a gateway-specific models.dev delta
+// (Copilot's 32k Claude output, etc.) actually publishes. Step 1 still
+// short-circuits: a hand-written PROVIDER_CAPABILITIES truncation is the
+// gateway's own number and must not be overwritten.
+//
 // ── HOW TO ADD / UPDATE A MODEL ──────────────────────────────────────
 // Authoritative data source: https://models.dev/api.json (145 providers, 4000+
 // models, MIT). Each model exposes the exact fields we map below:
@@ -73,7 +87,12 @@ export function capabilitiesFromServiceKind(kind) {
  * otherwise mis-match. Only declare deltas vs DEFAULT.
  */
 export const MODEL_CAPABILITIES = {
-  // Claude Opus 5, 4.6/4.7/4.8 and Kiro Sonnet 5 have 1M context + adaptive thinking (override generic claude pattern)
+  // Claude Fable 5.1, Opus 5.5/5, 4.6/4.7/4.8 and Kiro Sonnet 5 have 1M context + adaptive thinking (override generic claude pattern)
+  // Claude Opus 5.5 — experimental preview on Kiro (rateMultiplier: 2.0, 1M context) (#4410)
+  "claude-opus-5.5": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5.5-thinking": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5.5-agentic": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5.5-thinking-agentic": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
   "claude-opus-5": {
     vision: true,
     reasoning: true,
@@ -234,6 +253,30 @@ export const MODEL_CAPABILITIES = {
     contextWindow: 1000000,
     maxOutput: 128000,
   },
+  "claude-opus-5.5":                   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5.5-thinking":          { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5.5-agentic":           { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5.5-thinking-agentic":  { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5":     { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5-thinking": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5-agentic": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-5-thinking-agentic": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4.6":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4.7":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4-7":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4.8":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4-6":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4-8":   { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4.8-thinking": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-opus-4-8-thinking": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-sonnet-4.6": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-sonnet-4-6": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  // Sonnet 5.5 rejects thinking.type "disabled" (use "between_tools") and forced tool_choice (any/tool).
+  "claude-sonnet-5-5": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000, thinkingOffType: "between_tools", forcedToolChoice: false },
+  "claude-sonnet-5": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-sonnet-5-thinking": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-sonnet-5-agentic": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
+  "claude-sonnet-5-thinking-agentic": { vision: true, reasoning: true, search: true, thinkingFormat: "claude-adaptive", contextWindow: 1000000, maxOutput: 128000 },
 
   // Gemini image-gen / OpenAI image / xai image variants
   "gpt-image-1": { imageOutput: true, tools: false },
@@ -283,7 +326,17 @@ export const MODEL_CAPABILITIES = {
   // DeepSeek API and used to fall through to the generic *deepseek* pattern,
   // whose 128K/64K limits are repeated here: an exact entry short-circuits the
   // pattern table, so a vision-only delta would drop them.
+  // Some providers (e.g. Kenari) expose this model under the hyphenated ID
+  // "deepseek-v4-1-flash" (dash instead of dot); add it as an alias (#4293).
+  "deepseek-v4-1-flash": { vision: true, reasoning: true, thinkingFormat: "deepseek", contextWindow: 1000000, maxOutput: 384000 },
   "deepseek-v4.1-flash": {
+    vision: true,
+    reasoning: true,
+    thinkingFormat: "deepseek",
+    contextWindow: 1000000,
+    maxOutput: 384000,
+  },
+  "deepseek-v4.1-flash:free": {
     vision: true,
     reasoning: true,
     thinkingFormat: "deepseek",
@@ -392,12 +445,6 @@ export const MODEL_CAPABILITIES = {
     contextWindow: 500000,
     maxOutput: 500000,
   },
-  "gpt-5.6-luna": {
-    reasoning: true,
-    thinkingFormat: "openai",
-    contextWindow: 1100000,
-    maxOutput: 128888,
-  },
 };
 
 const KIRO_GPT_5_6_CAPABILITIES = {
@@ -424,11 +471,46 @@ const CODEX_GPT_56_DEFAULT_CAPS = {
   contextWindow: 272000,
   maxOutput: 128000,
 };
+const CODEX_EXTENDED_CAPS = { ...CODEX_GPT_56_DEFAULT_CAPS, contextWindow: 872000 };
+
+// Devin CLI's registry declares a 200k context window for these GPT variants.
+// Keep the GPT feature/output fields because provider overrides short-circuit
+// the generic pattern rather than merging with it.
+const DEVIN_CLI_GPT_CAPS = { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 200000, maxOutput: 128000 };
 
 /**
  * Provider-specific capability overrides. Keyed by provider alias/id.
  */
 export const PROVIDER_CAPABILITIES = {
+  // Hive AI — OpenAI-compatible endpoints with 1M context, vision/multimodal, tools.
+  // Keyed by the bare model id; the upstream "vendor/model" form resolves through
+  // the baseModel fallback in getCapabilitiesForModel.
+  // Verified live: reasoning_content streams on every turn regardless of request
+  // params (reasoning_effort / thinking / enable_thinking are all accepted and
+  // ignored), so thinking cannot be turned off.
+  hive: {
+    "deepseek-v4.1-flash": {
+      vision: true,
+      reasoning: true,
+      thinkingFormat: "openai",
+      thinkingCanDisable: false,
+      contextWindow: 1000000,
+    },
+    "glm-5.3-flash": {
+      vision: true,
+      videoInput: true,
+      reasoning: true,
+      thinkingFormat: "openai",
+      thinkingCanDisable: false,
+      contextWindow: 1000000,
+      // Verified live 2026-10-01 through /v1/chat/completions against
+      // api.thehive.ai: the stream closes with finish_reason "tool_calls" after
+      // a single delta that carries function.name and no arguments at all
+      // (completion_tokens: 1). The same route preserves arguments for
+      // hive/deepseek-v4.1-flash, so this is upstream, not the translator.
+      tools: false,
+    },
+  },
   // Kimchi provider — exactly the 4 models advertised by the Kimchi CLI.
   // Kimi entries copied from the official Kimchi CLI catalog
   // (https://models.dev/api.json, provider "moonshotai").
@@ -559,12 +641,22 @@ export const PROVIDER_CAPABILITIES = {
     },
   },
   codex: {
+    "gpt-6-astra": { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
+    "gpt-6.1-sol": { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
+    "gpt-6-sol": { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
+    "gpt-6-luna": { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 272000, maxOutput: 128000 },
     "gpt-5.6-sol": CODEX_GPT_56_SOL_CAPS,
     "gpt-5.6-sol-review": CODEX_GPT_56_SOL_CAPS,
     "gpt-5.6-terra": CODEX_GPT_56_DEFAULT_CAPS,
     "gpt-5.6-terra-review": CODEX_GPT_56_DEFAULT_CAPS,
     "gpt-5.6-luna": CODEX_GPT_56_DEFAULT_CAPS,
     "gpt-5.6-luna-review": CODEX_GPT_56_DEFAULT_CAPS,
+    "gpt-6-astra[1m]":           CODEX_EXTENDED_CAPS,
+    "gpt-6-sol[1m]":             CODEX_EXTENDED_CAPS,
+    "gpt-6-luna[1m]":            CODEX_EXTENDED_CAPS,
+    "gpt-5.6-sol[1m]":           CODEX_EXTENDED_CAPS,
+    "gpt-5.6-terra[1m]":         CODEX_EXTENDED_CAPS,
+    "gpt-5.6-luna[1m]":          CODEX_EXTENDED_CAPS,
   },
   kiro: {
     "gpt-5.6-sol": KIRO_GPT_5_6_CAPABILITIES,
@@ -579,6 +671,15 @@ export const PROVIDER_CAPABILITIES = {
     "gpt-5.6-sol-thinking-agentic": KIRO_GPT_5_6_CAPABILITIES,
     "gpt-5.6-terra-thinking-agentic": KIRO_GPT_5_6_CAPABILITIES,
     "gpt-5.6-luna-thinking-agentic": KIRO_GPT_5_6_CAPABILITIES,
+  },
+  "devin-cli": {
+    "gpt-5.4-high": DEVIN_CLI_GPT_CAPS,
+    "gpt-5.4-medium": DEVIN_CLI_GPT_CAPS,
+    "gpt-5.4-low": DEVIN_CLI_GPT_CAPS,
+    "gpt-5.5-xhigh": DEVIN_CLI_GPT_CAPS,
+    "gpt-5.5-high": DEVIN_CLI_GPT_CAPS,
+    "gpt-5.5-medium": DEVIN_CLI_GPT_CAPS,
+    "gpt-5.5-low": DEVIN_CLI_GPT_CAPS,
   },
   // CodeBuddy.cn — authoritative per-model metadata from the gateway's model
   // config (contextWindow=maxInputTokens, maxOutput=maxOutputTokens, vision=
@@ -774,6 +875,13 @@ export const PROVIDER_CAPABILITIES = {
   },
 };
 
+// Qoder CN serves the identical model catalog from the CN gateway, so it shares
+// the intl Qoder capability table verbatim (vision/reasoning/contextWindow).
+PROVIDER_CAPABILITIES["qoder-cn"] = PROVIDER_CAPABILITIES["qoder"];
+PROVIDER_CAPABILITIES.cx = PROVIDER_CAPABILITIES.codex;
+PROVIDER_CAPABILITIES.dv = PROVIDER_CAPABILITIES["devin-cli"];
+PROVIDER_CAPABILITIES.devin = PROVIDER_CAPABILITIES["devin-cli"];
+
 /**
  * Pattern fallback — glob (* = wildcard), matched case-insensitively and
  * anchored (^...$) so a pattern must match the full model id. ORDER MATTERS:
@@ -872,6 +980,20 @@ export const PATTERN_CAPABILITIES = [
       reasoning: true,
       search: true,
       thinkingFormat: "claude-budget",
+    },
+  },
+  {
+    // Sonnet 5.x (5, 5.5) takes adaptive thinking and the 1M window; both the
+    // dotted and hyphenated spellings must land here, ahead of the generic
+    // *claude*sonnet* rule that would otherwise send a thinking budget.
+    pattern: "*claude*sonnet-5*",
+    caps: {
+      vision: true,
+      reasoning: true,
+      search: true,
+      thinkingFormat: "claude-adaptive",
+      contextWindow: 1000000,
+      maxOutput: 128000,
     },
   },
   {
@@ -1022,7 +1144,7 @@ export const PATTERN_CAPABILITIES = [
     },
   },
   {
-    pattern: "*gpt-5*",
+    pattern: "*gpt-5-[0-3]*",
     caps: {
       vision: true,
       reasoning: true,
@@ -1052,6 +1174,40 @@ export const PATTERN_CAPABILITIES = [
     pattern: "*gpt-oss*",
     caps: { reasoning: true, thinkingFormat: "openai", contextWindow: 128000 },
   },
+  { pattern: "*gemini*image*",  caps: { vision: true, imageOutput: true, contextWindow: 1048576 } },
+  { pattern: "*gemini-3.8*",    caps: { vision: true, audioInput: true, videoInput: true, reasoning: true, search: true, thinkingFormat: "gemini-level", thinkingCanDisable: false, contextWindow: 1048576, maxOutput: 65536 } },
+  { pattern: "*gemini-3.7*",    caps: { vision: true, audioInput: true, videoInput: true, reasoning: true, search: true, thinkingFormat: "gemini-level", thinkingCanDisable: false, contextWindow: 1048576, maxOutput: 65536 } },
+  { pattern: "*gemini-3*pro*",  caps: { vision: true, audioInput: true, videoInput: true, reasoning: true, search: true, thinkingFormat: "gemini-level", thinkingCanDisable: false, contextWindow: 1048576, maxOutput: 65535 } },
+  { pattern: "*gemini-3*",      caps: { vision: true, audioInput: true, videoInput: true, reasoning: true, search: true, thinkingFormat: "gemini-level", thinkingCanDisable: false, contextWindow: 1048576, maxOutput: 65536 } },
+  { pattern: "*gemini-2.5*",    caps: { vision: true, audioInput: true, videoInput: true, reasoning: true, search: true, thinkingFormat: "gemini-budget", thinkingRange: { min: 0, max: 24576 }, contextWindow: 1048576, maxOutput: 65536 } },
+  { pattern: "*gemini-2*",      caps: { vision: true, audioInput: true, videoInput: true, search: true, contextWindow: 1048576, maxOutput: 65536 } },
+  { pattern: "*gemini*",        caps: { vision: true, search: true, contextWindow: 1048576 } },
+  { pattern: "*gemma*",         caps: { vision: true, contextWindow: 128000 } },
+  { pattern: "*nanobanana*",    caps: { vision: true, imageOutput: true } },
+  // ── OpenAI GPT-6.x (vision + thinking + web search) ──────────────
+  // 1.05M is the API window for the whole gpt-6 family (astra, luna, sol alike).
+  // A gateway that truncates lower records its own number in
+  // PROVIDER_CAPABILITIES, which wins over this pattern — Kiro at 272k, Codex
+  // OAuth at 272k/372k (see CODEX_GPT_56_* above). This entry used to carry
+  // Kiro's 272k, so every other provider's gpt-6 models inherited one gateway's
+  // limit and were published at 3.9x under their real window.
+  { pattern: "*gpt-6*",         caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 1050000, maxOutput: 128000 } },
+  { pattern: "*gpt-5*image*",   caps: { imageOutput: true } },
+  { pattern: "*gpt-5*codex*",   caps: { reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 400000, maxOutput: 128000 } },
+  // gpt-5.4 is where the 1.05M window starts, but the mini and nano tiers stayed
+  // at 400k — first match wins, so those two have to be listed ahead of it.
+  { pattern: "*gpt-5.4-mini*",  caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 400000, maxOutput: 128000 } },
+  { pattern: "*gpt-5.4-nano*",  caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 400000, maxOutput: 128000 } },
+  { pattern: "*gpt-5.4*",       caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 1050000, maxOutput: 128000 } },
+  { pattern: "*gpt-5.5*",       caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 1050000, maxOutput: 128000 } },
+  { pattern: "*gpt-5.6*",       caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 1050000, maxOutput: 128000 } },
+  { pattern: "*gpt-5*",         caps: { vision: true, reasoning: true, search: true, thinkingFormat: "openai", contextWindow: 400000, maxOutput: 128000 } },
+  { pattern: "*gpt-4o*",        caps: { vision: true, search: true, contextWindow: 128000, maxOutput: 16384 } },
+  { pattern: "*gpt-4.1*",       caps: { vision: true, contextWindow: 1000000, maxOutput: 32768 } },
+  { pattern: "*gpt-4-turbo*",   caps: { vision: true, contextWindow: 128000 } },
+  { pattern: "*gpt-4*",         caps: { contextWindow: 128000 } },
+  { pattern: "*gpt-3.5*",       caps: { contextWindow: 16385, maxOutput: 4096 } },
+  { pattern: "*gpt-oss*",       caps: { reasoning: true, thinkingFormat: "openai", contextWindow: 128000 } },
 
   // ── OpenAI o-series (reasoning, vision) ──────────────────────────
   {
@@ -1502,7 +1658,8 @@ const MODALITY_KEYS = ["vision", "pdf", "audioInput", "videoInput"];
 // The server bundles this module into every route chunk that needs it, and each
 // copy carries its own module state, so an install landing in the copy the
 // startup hook imported stays invisible to the copy resolving requests. The slot
-// lives on globalThis instead; the local binding is the fast path.
+// lives on globalThis instead, and every read goes through it: caching it locally
+// would keep a reader alive in other copies after setCatalogSource(null).
 let catalogSource = null;
 
 /**
@@ -1516,9 +1673,8 @@ export function setCatalogSource(source) {
 }
 
 function getCatalogSource() {
-  if (catalogSource) return catalogSource;
-  if (typeof globalThis === "undefined") return null;
-  return (catalogSource = globalThis.__9rCatalogSource || null);
+  if (typeof globalThis === "undefined") return catalogSource;
+  return globalThis.__9rCatalogSource || null;
 }
 
 // Apply the synced catalog + name heuristic on top of a table-resolved result.
@@ -1615,11 +1771,10 @@ export function getCapabilitiesForModel(provider, model) {
       return { ...DEFAULT_CAPABILITIES, ...providerCaps[baseModel] };
   }
 
-  // 2. Canonical exact
-  if (MODEL_CAPABILITIES[baseModel])
-    return { ...DEFAULT_CAPABILITIES, ...MODEL_CAPABILITIES[baseModel] };
-  if (MODEL_CAPABILITIES[model])
-    return { ...DEFAULT_CAPABILITIES, ...MODEL_CAPABILITIES[model] };
+  // 2. Canonical exact, then catalog overlay so provider-scoped models.dev
+  //    deltas still apply. Step 1 above still short-circuits.
+  if (MODEL_CAPABILITIES[baseModel]) return refine(MODEL_CAPABILITIES[baseModel], provider, model);
+  if (MODEL_CAPABILITIES[model]) return refine(MODEL_CAPABILITIES[model], provider, model);
 
   // 3. Pattern match (first match wins), refined by catalog + name heuristic
   for (const { pattern, caps } of PATTERN_CAPABILITIES) {

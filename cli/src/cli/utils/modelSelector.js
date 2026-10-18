@@ -2,9 +2,9 @@ const api = require("../api/client");
 const { prompt } = require("./input");
 const { clearScreen } = require("./display");
 
-// Provider alias order: OAuth first, then API Key (matches ModelSelectModal)
+// Provider alias order: OAuth first, then Free, then API Key
 const PROVIDER_ALIAS_ORDER = [
-  "cc", "ag", "cx", "if", "qw", "gc", "gh", "kr",
+  "cc", "ag", "cx", "if", "qw", "gc", "gh", "kr", "oc",
   "openrouter", "glm", "kimi", "minimax", "openai", "anthropic", "gemini", "opencode-go"
 ];
 
@@ -18,8 +18,10 @@ const PROVIDER_ALIAS_NAMES = {
   gc: "Gemini CLI",
   gh: "GitHub Copilot",
   kr: "Kiro AI",
+  oc: "OpenCode Free",
+  opencode: "OpenCode Free",
   openrouter: "OpenRouter",
-  glm: "GLM Coding",
+  glm: "Zai GLM Coding",
   kimi: "Kimi Coding",
   minimax: "Minimax Coding",
   openai: "OpenAI",
@@ -28,15 +30,67 @@ const PROVIDER_ALIAS_NAMES = {
   "opencode-go": "OpenCode Go"
 };
 
+// Provider aliases are taken from the server: /api/providers returns each
+// connection's `alias`, an alias→id `aliasMap`, and every provider's `noAuth`
+// flag (src/app/api/providers/route.js:73,82-99). This module used to keep its
+// own id→alias table, which had drifted from the registry (cline→cl, zed→zd,
+// qoder-cn→qdcn, codebuddy-cn→cbcn, grok-cli→gcli) and silently dropped those
+// providers' models from the picker.
+
 /**
- * Get all available models grouped by provider + combos
+ * Aliases that /v1/models may stamp into `owned_by` and that are usable right now:
+ * every registered no-auth provider, plus every active connection's id, alias and
+ * custom-node prefix. Everything comes from the /api/providers payload, so it
+ * cannot drift from the registry the way the removed hand-written table did.
+ * @param {{connections?: Array, providers?: Array, aliasMap?: Object}} providerData
+ * @returns {Set<string>}
+ */
+function buildActiveAliases(providerData = {}) {
+  const activeAliases = new Set();
+
+  for (const def of providerData.providers || []) {
+    if (!def || !def.noAuth) continue;
+    activeAliases.add(def.id);
+    if (def.alias) activeAliases.add(def.alias);
+    for (const alias of def.aliases || []) activeAliases.add(alias);
+  }
+
+  // aliasMap is alias→id; invert it so a connected id also admits its alias.
+  const aliasOfId = {};
+  for (const [alias, id] of Object.entries(providerData.aliasMap || {})) {
+    if (!aliasOfId[id]) aliasOfId[id] = alias;
+  }
+
+  for (const conn of providerData.connections || []) {
+    if (!conn || conn.isActive === false) continue;
+    const p = conn.provider;
+    if (!p) continue;
+    activeAliases.add(p);
+    if (conn.alias) activeAliases.add(conn.alias);
+    if (aliasOfId[p]) activeAliases.add(aliasOfId[p]);
+    const prefix = conn.providerSpecificData?.prefix;
+    if (prefix) activeAliases.add(prefix);
+  }
+
+  return activeAliases;
+}
+
+/**
+ * Get all available models grouped by provider + combos (filtered by active connections)
  * @returns {Promise<{combos: Array, groups: Object}>}
  */
 async function getAvailableModelsGrouped() {
-  const result = await api.getAvailableModels();
-  if (!result.success) return { combos: [], groups: {} };
+  const [modelsResult, providersResult] = await Promise.all([
+    api.getAvailableModels(),
+    api.getProviders()
+  ]);
 
-  const models = result.data?.data || [];
+  if (!modelsResult.success) return { combos: [], groups: {} };
+
+  const providerData = providersResult.success ? (providersResult.data || {}) : {};
+  const activeAliases = buildActiveAliases(providerData);
+
+  const models = modelsResult.data?.data || [];
   const combos = [];
   const groups = {};
 
@@ -45,6 +99,8 @@ async function getAvailableModelsGrouped() {
       combos.push(m.id);
     } else {
       const provider = m.owned_by;
+      // Only keep connected providers or noAuth providers
+      if (!activeAliases.has(provider)) return;
       if (!groups[provider]) {
         groups[provider] = [];
       }
@@ -69,6 +125,19 @@ async function selectModelFromList(title, currentValue = "", options = {}) {
 
   const totalModels = combos.length + Object.values(groups).flat().length;
   if (totalModels === 0) {
+    clearScreen();
+    console.log(`\n🎯 ${title}`);
+    console.log("=".repeat(50));
+    console.log("\n  No connected providers found.");
+    console.log("  Please connect a provider in Providers menu first.\n");
+    console.log("  m. ✍️  Enter custom model ID");
+    console.log("  0. Cancel\n");
+    const act = await prompt("Select option (m/0): ");
+    const trimmed = act.trim();
+    if (trimmed.toLowerCase() === "m") {
+      const custom = await prompt("Enter custom model ID: ");
+      return custom.trim() || null;
+    }
     return null;
   }
 
@@ -269,6 +338,7 @@ async function selectModelFromList(title, currentValue = "", options = {}) {
 module.exports = {
   selectModelFromList,
   getAvailableModelsGrouped,
+  buildActiveAliases,
   PROVIDER_ALIAS_ORDER,
   PROVIDER_ALIAS_NAMES
 };

@@ -3,10 +3,13 @@ import REGISTRY from "../providers/registry/index.js";
 // PROVIDER_MODELS now built from providers/registry (transport + models co-located)
 import { PROVIDER_MODELS } from "../providers/index.js";
 import { modelQuotaFamily, modelStrip, modelTargetFormat, modelSupportedFormats, normalizeModelId } from "../providers/models/schema.js";
-import { CODEX_REVIEW_SUFFIX } from "../providers/models/helpers.js";
+import { CODEX_REVIEW_SUFFIX, isMuseSparkModel, opencodeFamilyFormats } from "../providers/models/helpers.js";
+import { FORMATS } from "../translator/formats.js";
 import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
-
 export { PROVIDER_MODELS };
+
+// OpenCode providers sharing the endpoint-family fallback for unknown model ids
+const isOpenCodeAlias = (aliasOrId) => !aliasOrId || ["oc", "opencode", "ocg", "opencode-go", "ocz", "opencode-zen"].includes(aliasOrId);
 
 
 // Helper functions
@@ -27,12 +30,19 @@ const DOT_VERSION_PROVIDERS = new Set(["kr", "kiro"]);
 // Find a registry entry by id. Thinking variants ("model(level)") resolve to their
 // base id so responses-only models keep their routing. For Kiro models, tolerates
 // dash/dot version separators ("claude-sonnet-4-5" ~= "claude-sonnet-4.5").
-// Other providers use exact match only.
+// A few registries store ids that already carry the org prefix
+// ("nvidia/nemotron-…"), so a bare lookup misses and the bare id reaches upstream
+// as a 404. Retry as "<alias>/<id>"; no registry carries a bare id that collides
+// with another entry's prefixed tail, so the retry is unambiguous.
 function findModel(models, modelId, aliasOrId) {
   if (!models) return undefined;
   const baseModelId = stripThinkingSuffix(modelId);
   const found = models.find(m => m.id === modelId || m.id === baseModelId);
   if (found) return found;
+  if (aliasOrId) {
+    const prefixed = models.find(m => m.id === `${aliasOrId}/${baseModelId}`);
+    if (prefixed) return prefixed;
+  }
   if (!DOT_VERSION_PROVIDERS.has(aliasOrId)) return undefined;
   const normalized = normalizeModelId(baseModelId);
   if (normalized === baseModelId) return undefined;
@@ -54,14 +64,29 @@ export function findModelName(aliasOrId, modelId) {
 }
 
 export function getModelTargetFormat(aliasOrId, modelId) {
+  if (isOpenCodeAlias(aliasOrId) && isMuseSparkModel(modelId)) {
+    return FORMATS.OPENAI_RESPONSES;
+  }
   const models = PROVIDER_MODELS[aliasOrId];
   if (!models) return null;
-  return modelTargetFormat(findModel(models, modelId, aliasOrId));
+  const found = findModel(models, modelId, aliasOrId);
+  if (found) return modelTargetFormat(found);
+  // Family fallback keeps modelsFetcher/passthrough ids on their endpoint lane
+  if (isOpenCodeAlias(aliasOrId)) return opencodeFamilyFormats(modelId)?.targetFormat || null;
+  return null;
 }
 
+// Declared upstream formats for a model (registry `supportedFormats`). Drives the
+// per-model guard on the sourceFormat-matched transport; null when undeclared.
+// Unknown OpenCode ids fall back to the family regex (chat lane by default) so
+// auto-fetched models never wrongly use the sourceFormat-matched transport.
 export function getModelSupportedFormats(aliasOrId, modelId) {
   const models = PROVIDER_MODELS[aliasOrId];
-  return models ? modelSupportedFormats(findModel(models, modelId, aliasOrId)) : null;
+  if (!models) return null;
+  const found = findModel(models, modelId, aliasOrId);
+  if (found) return modelSupportedFormats(found);
+  if (isOpenCodeAlias(aliasOrId)) return opencodeFamilyFormats(modelId)?.supportedFormats || [FORMATS.OPENAI];
+  return null;
 }
 
 export function getModelType(aliasOrId, modelId) {

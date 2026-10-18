@@ -14,6 +14,7 @@ export default {
     },
   },
   category: "apikey",
+  hasFree: true,
   transport: {
     baseUrl: "https://api.cline.bot/api/v1/chat/completions",
     thinkingFormat: "openai",

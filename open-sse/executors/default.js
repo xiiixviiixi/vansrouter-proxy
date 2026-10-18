@@ -1,6 +1,6 @@
 import { BaseExecutor } from "./base.js";
 import { PROVIDERS, PROVIDER_OAUTH } from "../config/providers.js";
-import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, applyAuth } from "../providers/shared.js";
+import { ANTHROPIC_API_VERSION, OPENAI_COMPAT_BASE, ANTHROPIC_COMPAT_BASE, applyAuth, mergeAnthropicBeta } from "../providers/shared.js";
 import { OAUTH_ENDPOINTS, buildKimiHeaders } from "../config/appConstants.js";
 import { buildClineHeaders } from "../shared/clineAuth.js";
 import { getCachedClaudeHeaders } from "../utils/claudeHeaderCache.js";
@@ -9,6 +9,7 @@ import { injectReasoningContent } from "../utils/reasoningContentInjector.js";
 import { stripUnsupportedParams } from "../translator/concerns/paramSupport.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { getKimchiUserAgent } from "../utils/kimchiUserAgent.js";
+import { extractClaudeSessionIdFromUserId } from "../utils/claudeCloaking.js";
 
 // Auth header descriptors — derived from registry transport.auth, fallback to hardcoded defaults.
 const BEARER = { combined: true, header: "Authorization", scheme: "bearer" };
@@ -24,6 +25,8 @@ const HEADER_HOOKS = {
   // Stable device_id from OAuth connection (CLIProxyAPI KimiTokenStorage.DeviceID)
   kimiHeaders: (h, c) => Object.assign(h, buildKimiHeaders(c?.providerSpecificData?.deviceId)),
   kimchiHeaders: (h) => { h["User-Agent"] = getKimchiUserAgent(); },
+  // Muse: x-api-version only on subscription (minted key) requests — plain
+  museHeaders: (h, c) => { if (c?.accessToken && !c?.apiKey) h["x-api-version"] = "1.0.0"; },
   clineHeaders: (h, c) => Object.assign(h, buildClineHeaders(c.apiKey || c.accessToken)),
   kilocodeOrg: (h, c) => { if (c.providerSpecificData?.orgId) h["X-Kilocode-OrganizationID"] = c.providerSpecificData.orgId; },
   claudeOverlay: (h) => {
@@ -259,7 +262,7 @@ export class DefaultExecutor extends BaseExecutor {
     return BEARER;
   }
 
-  buildHeaders(credentials, stream = true) {
+  buildHeaders(credentials, stream = true, url, model, body = null) {
     const rt = credentials?.runtimeTransport;
     const headers = { "Content-Type": "application/json", ...(rt ? rt.headers : this.config.headers) };
     const desc = rt?.auth || AUTH_DESCRIPTORS[this.provider] || this.resolveAuthDescriptor();
@@ -268,6 +271,27 @@ export class DefaultExecutor extends BaseExecutor {
     for (const hook of hooks) HEADER_HOOKS[hook]?.(headers, credentials);
     applyAuth(headers, desc, credentials);
 
+    // The Anthropic beta flag set is pinned per provider in this repo (see
+    // providers/registry/{claude,anthropic}.js). Merge whatever the client sent
+    // into that pinned set so caller-side flags survive instead of being
+    // dropped. The model id gates the compatible-node case: a node fronting
+    // Kimi or GLM answers on its own ids and never matches, so gateways that
+    // would choke on unknown beta flags are left untouched.
+    const clientBeta = credentials?.rawHeaders?.["anthropic-beta"];
+    const isClaudeModel = typeof model === "string" && /^claude-/.test(model);
+    if (clientBeta && (this.provider === "claude" || this.provider === "anthropic"
+      || (this.provider?.startsWith?.("anthropic-compatible-") && isClaudeModel))) {
+      headers["Anthropic-Beta"] = mergeAnthropicBeta(headers["Anthropic-Beta"], clientBeta);
+    }
+
+    // Claude OAuth: align x-claude-code-session-id with metadata.user_id.session_id if missing
+    if (this.provider === "claude" && !headers["x-claude-code-session-id"]) {
+      const token = credentials?.accessToken || credentials?.apiKey || "";
+      if (token.includes("sk-ant-oat")) {
+        const sid = extractClaudeSessionIdFromUserId(body?.metadata?.user_id);
+        if (sid) headers["x-claude-code-session-id"] = sid;
+      }
+    }
     // Strip first-party Claude Code identity headers for non-Anthropic anthropic-compatible upstreams
     if (this.provider?.startsWith?.("anthropic-compatible-")) {
       const baseUrl = credentials?.providerSpecificData?.baseUrl || "";

@@ -1,10 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { CLAUDE_TOOL_SUFFIX, CC_DEFAULT_TOOLS } from "../config/appConstants.js";
 
-const CLAUDE_VERSION = "2.1.92";
+const CLAUDE_VERSION = "2.1.280";
 const CC_ENTRYPOINT = "sdk-cli";
 
-// Generate billing header matching real Claude Code 2.1.92+ format:
+// Generate billing header matching real Claude Code 2.1.280+ format:
 // x-anthropic-billing-header: cc_version=<ver>.<build>; cc_entrypoint=sdk-cli; cch=<hash>;
 // Deterministic per (apiKey, sessionId): random bytes here would change system[0]
 // every request and kill Anthropic prompt-cache prefix hits.
@@ -21,14 +21,29 @@ function deriveUuid(seed) {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-// Generate fake user ID in Claude Code 2.1.92+ JSON format:
+// Generate fake user ID in Claude Code 2.1.280+ JSON format:
 // {"device_id":"<64hex>","account_uuid":"<uuid>","session_id":"<uuid>"}
 // device_id/account_uuid derive from apiKey (stable per account), session_id per-conversation
 function generateFakeUserID(sessionId, apiKey) {
   const deviceId = apiKey ? createHash("sha256").update(`device:${apiKey}`).digest("hex") : randomBytes(32).toString("hex");
   const accountUuid = apiKey ? deriveUuid(`account:${apiKey}`) : randomUUID();
-  const sessionUuid = sessionId || randomUUID();
+  const cleanSessionId = typeof sessionId === "string" ? sessionId.replace(/^claude:/i, "").trim() : null;
+  const sessionUuid = cleanSessionId || randomUUID();
   return `{"device_id":"${deviceId}","account_uuid":"${accountUuid}","session_id":"${sessionUuid}"}`;
+}
+
+export function extractClaudeSessionIdFromUserId(userId) {
+  if (typeof userId !== "string" || !userId) return null;
+  if (userId[0] === "{") {
+    try {
+      const sid = JSON.parse(userId)?.session_id;
+      return typeof sid === "string" && sid ? sid.replace(/^claude:/i, "").trim() || null : null;
+    } catch {
+      return null;
+    }
+  }
+  const clean = userId.replace(/^claude:/i, "").trim();
+  return clean || null;
 }
 
 /**
@@ -91,14 +106,29 @@ export function cloakClaudeTools(body) {
   };
 }
 
+// Strip a trailing CLAUDE_TOOL_SUFFIX from a cloaked name as a last-resort
+// fallback when the name isn't in toolNameMap (e.g. map lost across a retry/
+// reconnect). Never strips decoy names — those are meant to reach the client
+// unresolved so it can see "tool unavailable" instead of silently no-oping.
+function stripCloakSuffix(name) {
+  if (typeof name !== "string" || !name.endsWith(CLAUDE_TOOL_SUFFIX)) return null;
+  if (CC_DEFAULT_TOOLS.has(name)) return null;
+  const original = name.slice(0, -CLAUDE_TOOL_SUFFIX.length);
+  return original.length > 0 ? original : null;
+}
+
 // Decloak tool_use names in non-streaming Claude response body (INPUT side)
 export function decloakToolNames(body, toolNameMap) {
-  if (!toolNameMap?.size || !Array.isArray(body?.content)) return body;
+  if (!Array.isArray(body?.content)) return body;
   const content = body.content.map(block => {
-    if (block?.type === "tool_use" && toolNameMap.has(block.name)) {
+    if (block?.type !== "tool_use") return block;
+    if (toolNameMap?.has(block.name)) {
       return { ...block, name: toolNameMap.get(block.name) };
     }
-    return block;
+    // toolNameMap missing/stale for this name — fall back to suffix stripping
+    // rather than forwarding an unresolvable "<tool>_ide" name to the client.
+    const fallback = stripCloakSuffix(block.name);
+    return fallback ? { ...block, name: fallback } : block;
   });
   return { ...body, content };
 }
@@ -113,19 +143,21 @@ export function decloakToolNames(body, toolNameMap) {
  * name appears exactly once per call — on the content_block_start event of
  * a tool_use block; argument deltas carry no name.
  *
- * Unknown names (e.g. a CC decoy tool the model called anyway) pass through
- * unchanged, matching the non-streaming decloak behavior.
+ * Falls back to stripping the literal CLAUDE_TOOL_SUFFIX when the name isn't
+ * in toolNameMap (map lost across a retry/reconnect), matching the
+ * non-streaming decloak behavior. Decoy tool names (real CC tool names) and
+ * anything else pass through unchanged.
  *
  * @param {object|null} chunk - Parsed SSE event (may be null on stream flush)
  * @param {Map|null} toolNameMap - Suffixed → original name map from cloakClaudeTools()
  * @returns {object|null} The chunk, with the tool_use name restored when cloaked
  */
 export function decloakStreamChunk(chunk, toolNameMap) {
-  if (!toolNameMap?.size || !chunk || typeof chunk !== "object") return chunk;
+  if (!chunk || typeof chunk !== "object") return chunk;
   if (chunk.type !== "content_block_start") return chunk;
   const block = chunk.content_block;
   if (block?.type !== "tool_use" || typeof block.name !== "string") return chunk;
-  const original = toolNameMap.get(block.name);
+  const original = toolNameMap?.get(block.name) || stripCloakSuffix(block.name);
   if (!original) return chunk;
   return { ...chunk, content_block: { ...block, name: original } };
 }

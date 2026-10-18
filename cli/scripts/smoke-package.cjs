@@ -6,10 +6,11 @@ const path = require("path");
 const http = require("http");
 const { execFileSync, spawn } = require("child_process");
 
-const [tarball, expectedVersion] = process.argv.slice(2);
-if (!tarball || !expectedVersion) {
+const [tarballArg, expectedVersion] = process.argv.slice(2);
+if (!tarballArg || !expectedVersion) {
   throw new Error("Usage: smoke-package.cjs <tarball> <version>");
 }
+const tarball = path.resolve(tarballArg);
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "vansrouter-release-"));
 const dataDir = path.join(root, "data");
@@ -18,14 +19,21 @@ fs.mkdirSync(dataDir, { recursive: true });
 fs.writeFileSync(path.join(dataDir, "db.json"), JSON.stringify({
   settings: { requireLogin: false },
 }));
-execFileSync("tar", ["-xzf", tarball, "-C", root]);
+execFileSync("tar", ["-xzf", "-"], {
+  cwd: root,
+  input: fs.readFileSync(tarball),
+});
 
 const appDir = path.join(root, "package", "app");
 const bundledModules = path.join(appDir, "_nm");
-const serverPath = fs.existsSync(path.join(appDir, "custom-server.js"))
-  ? path.join(appDir, "custom-server.js")
-  : path.join(appDir, "server.js");
-if (!fs.existsSync(serverPath)) throw new Error(`Bundled server missing: ${serverPath}`);
+const serverPath = path.join(appDir, "custom-server.js");
+if (!fs.existsSync(serverPath)) throw new Error(`Bundled custom server missing: ${serverPath}`);
+const runtimeSecretsPath = path.join(appDir, "runtime-secrets.cjs");
+if (!fs.existsSync(runtimeSecretsPath)) throw new Error(`Bundled runtime secret validator missing: ${runtimeSecretsPath}`);
+const nextPackage = path.join(bundledModules, "next", "package.json");
+if (!fs.existsSync(nextPackage)) {
+  throw new Error(`Bundled Next.js dependency missing: ${nextPackage}`);
+}
 
 let output = "";
 const child = spawn(process.execPath, [serverPath], {
@@ -33,10 +41,13 @@ const child = spawn(process.execPath, [serverPath], {
   env: {
     ...process.env,
     DATA_DIR: dataDir,
+    DATA_DIR_ALLOW_TEMP: "1",
     HOSTNAME: "127.0.0.1",
     NODE_ENV: "production",
-    NODE_PATH: [bundledModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+    NODE_PATH: bundledModules,
     NEXT_TELEMETRY_DISABLED: "1",
+    VANSROUTER_SKIP_UPDATE_CHECK: "1",
+    VANROUTER_SKIP_UPDATE_CHECK: "1",
     PORT: String(port),
   },
   stdio: ["ignore", "pipe", "pipe"],
@@ -75,6 +86,13 @@ async function main() {
     const settings = JSON.parse(response.body);
     if (settings.requireLogin !== false) {
       throw new Error(`Legacy db.json was not migrated: ${response.body}`);
+    }
+    const health = await request("/api/health");
+    if (health.status !== 200) throw new Error(`Health check failed: ${health.status}`);
+    const version = await request("/api/version");
+    const versionBody = JSON.parse(version.body);
+    if (version.status !== 200 || versionBody.currentVersion !== expectedVersion) {
+      throw new Error(`Version check failed: ${version.status} ${version.body}`);
     }
 
     // sql.js persists on a short debounce after writes; observe the durable file,

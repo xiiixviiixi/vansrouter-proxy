@@ -1,14 +1,15 @@
 import { DefaultExecutor } from "./default.js";
 import { randomUUID } from "node:crypto";
+import { ANTHROPIC_API_VERSION } from "../providers/shared.js";
 
 export function buildAgentRouterHeaders(apiKey, stream = true) {
   return {
     "Content-Type": "application/json",
-    "anthropic-version": "2023-06-01",
+    "anthropic-version": ANTHROPIC_API_VERSION,
     "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24",
     "anthropic-dangerous-direct-browser-access": "true",
     "x-app": "cli",
-    "User-Agent": "claude-cli/2.1.195 (external, sdk-cli)",
+    "User-Agent": "claude-cli/2.1.280 (external, sdk-cli)",
     "X-Claude-Code-Session-Id": randomUUID(),
     "X-Stainless-Retry-Count": "0",
     "X-Stainless-Timeout": "600",

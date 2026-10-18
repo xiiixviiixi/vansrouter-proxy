@@ -41,7 +41,7 @@ export function useCliToolLifecycle({ apiKeys, baseUrl, cloudEnabled, initialSta
   const checkStatus = useCallback(async () => {
     dispatch({ type: "CHECK_START" });
     try {
-      const res = await fetch(statusEndpoint);
+      const res = await fetch(statusEndpoint, { cache: "no-store" });
       const data = await res.json();
       dispatch({ type: "CHECK_DONE", data });
     } catch (error) {
@@ -71,7 +71,7 @@ export function useCliToolLifecycle({ apiKeys, baseUrl, cloudEnabled, initialSta
 
   const selectedApiKey = selectedApiKeyOverride ?? (getInitialApiKey ? getInitialApiKey(state.status, apiKeys) : (apiKeys?.length > 0 ? apiKeys[0].key : ""));
   const getEffectiveBaseUrl = useCallback(() => {
-    const url = customBaseUrl || getDefaultBaseUrl(baseUrl);
+    const url = (customBaseUrl || getDefaultBaseUrl(baseUrl)).replace(/\/+$/, "");
     return url.endsWith("/v1") ? url : `${url}/v1`;
   }, [baseUrl, customBaseUrl, getDefaultBaseUrl]);
   const getDisplayUrl = useCallback(() => customBaseUrl || getDefaultBaseUrl(baseUrl), [baseUrl, customBaseUrl, getDefaultBaseUrl]);

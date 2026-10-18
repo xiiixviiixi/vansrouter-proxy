@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { PROVIDERS, PROVIDER_MODELS } from "../../open-sse/config/providers.js";
 import { resolveProviderAlias } from "../../open-sse/services/model.js";
 import { resolveProviderId } from "@/shared/constants/providers.js";
+import { getCapabilitiesForModel } from "../../open-sse/providers/capabilities.js";
+import { getPricingForModel } from "../../open-sse/providers/pricing.js";
 
 describe("TokenHarbor provider", () => {
   it("registers in PROVIDERS with expected baseUrl", () => {
@@ -42,6 +44,10 @@ describe("TokenHarbor provider", () => {
     expect(modelIds).toContain("th-orchestra");
     expect(modelIds).toContain("claude-opus-5");
     expect(modelIds).toContain("deepseek-v4-flash");
+    expect(modelIds).toContain("mimo-v2.6-flash:free");
+    expect(modelIds).toContain("qwen3.8-flash:free");
+    expect(modelIds).toContain("deepseek-v4.1-flash:free");
+    expect(modelIds).toContain("glm-5.3-flash");
   });
 
   it("resolves alias 'th' to 'tokenharbor'", () => {
@@ -51,5 +57,18 @@ describe("TokenHarbor provider", () => {
   it("resolves provider ID 'tokenharbor' correctly", () => {
     expect(resolveProviderId("tokenharbor")).toBe("tokenharbor");
     expect(resolveProviderId("th")).toBe("tokenharbor");
+  });
+
+  it("assigns free pricing (0 cost) and multimodal vision to deepseek-v4.1-flash:free", () => {
+    const caps = getCapabilitiesForModel("tokenharbor", "deepseek-v4.1-flash:free");
+    expect(caps.vision).toBe(true);
+    expect(caps.reasoning).toBe(true);
+    expect(caps.contextWindow).toBe(1000000);
+
+    const pricing = getPricingForModel("tokenharbor", "deepseek-v4.1-flash:free");
+    expect(pricing).toEqual({ input: 0, output: 0, cached: 0, reasoning: 0, cache_creation: 0 });
+
+    const paidPricing = getPricingForModel("tokenharbor", "deepseek-v4.1-flash");
+    expect(paidPricing.input).toBeGreaterThan(0);
   });
 });

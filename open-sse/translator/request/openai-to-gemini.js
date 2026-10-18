@@ -20,6 +20,7 @@ import {
 } from "../formats/gemini.js";
 import { deriveSessionId, toNumericSessionId } from "../../utils/sessionManager.js";
 import { ROLE, GEMINI_ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { fitToolName } from "../concerns/toolCall.js";
 
 // Sanitize function names for Gemini API.
 // Gemini requires: starts with [a-zA-Z_], followed by [a-zA-Z0-9_.:\-], max 64 chars.
@@ -33,7 +34,7 @@ function sanitizeGeminiFunctionName(name) {
     sanitized = "_" + sanitized;
   }
   // Truncate to 64 chars
-  return sanitized.substring(0, 64);
+  return fitToolName(sanitized, 64);
 }
 
 // Core: Convert OpenAI request to Gemini format (base for all variants)
